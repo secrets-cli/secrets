@@ -151,6 +151,9 @@ Mapping values may use special prefixes:
 					continue
 				}
 				if v.StoreKey == v.EnvName {
+					if hint := resolveProfileHint(v.EnvName, resolveFile, localPath, resolveProfile); hint != "" {
+						return UserError(hint)
+					}
 					return UserError(fmt.Sprintf("key %q not found in store", v.EnvName))
 				}
 				return UserError(fmt.Sprintf("key %q not found in store (mapped from %q)", v.StoreKey, v.EnvName))
@@ -185,6 +188,94 @@ Mapping values may use special prefixes:
 
 		return nil
 	},
+}
+
+// resolveProfileHint scans all profiles in the manifest and local manifest for
+// any mapping of envName. When found (and no profile is currently active), it
+// returns a user-friendly error hint explaining which profile(s) can resolve the key.
+// Returns "" when no hint is applicable. Loads the manifests itself: this runs
+// only on the key-not-found error path, so the parse cost is never on the happy path.
+func resolveProfileHint(envName, manifestPath, localPath, activeProfile string) string {
+	m, err := manifest.Load(manifestPath)
+	if err != nil {
+		return ""
+	}
+	local, err := manifest.LoadLocal(localPath)
+	if err != nil {
+		return ""
+	}
+
+	type mapping struct {
+		profile  string
+		storeKey string
+	}
+	var mappings []mapping
+
+	// Collect mappings from all non-global profiles in both manifests.
+	// Skip the currently active profile since its mappings are already being used.
+	for name, pm := range m.Profiles {
+		if name == "global" || name == activeProfile {
+			continue
+		}
+		if sk, ok := pm[envName]; ok {
+			mappings = append(mappings, mapping{name, sk})
+		}
+	}
+	for name, pm := range local.Profiles {
+		if name == "global" || name == activeProfile {
+			continue
+		}
+		if sk, ok := pm[envName]; ok {
+			mappings = append(mappings, mapping{name, sk})
+		}
+	}
+
+	if len(mappings) == 0 {
+		return ""
+	}
+
+	// Build the hint message.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("key %q not found in store\n\n", envName))
+
+	if len(mappings) == 1 {
+		m := mappings[0]
+		sb.WriteString(fmt.Sprintf("Hint: profile %q maps %s → %s\n", m.profile, envName, m.storeKey))
+		if activeProfile == "" {
+			sb.WriteString(fmt.Sprintf("Try: vars resolve --profile %s\n", m.profile))
+		}
+	} else {
+		sb.WriteString("Hint: these profiles map " + envName + " to a store key:\n")
+		for _, m := range mappings {
+			sb.WriteString(fmt.Sprintf("  - %s → %s\n", m.profile, m.storeKey))
+		}
+		if activeProfile == "" {
+			sb.WriteString("\nTry: vars resolve --profile <profile-name>\n")
+		}
+	}
+
+	// List all available profiles (including global and active if present).
+	var allProfiles []string
+	for name := range m.Profiles {
+		allProfiles = append(allProfiles, name)
+	}
+	for name := range local.Profiles {
+		found := false
+		for _, p := range allProfiles {
+			if p == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			allProfiles = append(allProfiles, name)
+		}
+	}
+	if len(allProfiles) > 0 {
+		sb.WriteString("Available profiles: " + strings.Join(allProfiles, ", "))
+	}
+
+	return sb.String()
 }
 
 // resolveStoreKey tries the given key, then falls back by stripping successive

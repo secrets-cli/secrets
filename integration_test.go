@@ -546,7 +546,6 @@ func TestIntegration_Passwd_SetToEmpty(t *testing.T) {
 	}
 }
 
-
 func TestIntegration_WrongPassphrase(t *testing.T) {
 	r := newRunner(t)
 
@@ -1395,5 +1394,140 @@ profiles:
 	_, stderr := r.mustRunWithStderr("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"), "--profile", "nonexistent", "--partial")
 	if !strings.Contains(stderr, "nonexistent") {
 		t.Fatalf("expected warning mentioning profile name, got: %s", stderr)
+	}
+}
+
+func TestIntegration_Resolve_MissingKey_ProfileHint(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	// Store has DEPLOYER_KEY but not DEPLOYMENT_PRIVATE_KEY (bare).
+	r.mustRun("set", "DEPLOYER_KEY", "0xSECRET")
+
+	r.writeFile(".vars.yaml", `keys:
+  - DEPLOYMENT_PRIVATE_KEY
+profiles:
+  common:
+    DEPLOYMENT_PRIVATE_KEY: DEPLOYER_KEY
+  sepolia:
+    DEPLOYMENT_PRIVATE_KEY: dev/DEPLOYER_KEY
+  zksync-sepolia:
+    DEPLOYMENT_PRIVATE_KEY: zksync/DEPLOYER_KEY
+`)
+
+	// No --profile flag: identity path used, DEPLOYMENT_PRIVATE_KEY not in store.
+	_, stderr := r.mustFail("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"))
+
+	if !strings.Contains(stderr, "not found in store") {
+		t.Fatalf("expected 'not found in store' error, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "Hint:") {
+		t.Fatalf("expected hint section, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "DEPLOYMENT_PRIVATE_KEY") {
+		t.Fatalf("expected env name in hint, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "DEPLOYER_KEY") {
+		t.Fatalf("expected store key in hint, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "vars resolve --profile") {
+		t.Fatalf("expected 'Try: vars resolve --profile' suggestion, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "Available profiles:") {
+		t.Fatalf("expected 'Available profiles' in hint, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "common") || !strings.Contains(stderr, "sepolia") || !strings.Contains(stderr, "zksync-sepolia") {
+		t.Fatalf("expected all profile names listed, got: %s", stderr)
+	}
+}
+
+func TestIntegration_Resolve_MissingKey_NoProfileHintWhenProfileActive(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	r.mustRun("set", "DEPLOYER_KEY", "0xSECRET")
+
+	r.writeFile(".vars.yaml", `keys:
+  - DEPLOYMENT_PRIVATE_KEY
+profiles:
+  common:
+    DEPLOYMENT_PRIVATE_KEY: DEPLOYER_KEY
+`)
+
+	// With --profile common active: the resolved store key is DEPLOYER_KEY which exists.
+	// This should succeed, not produce an error.
+	out := r.mustRun("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"), "--profile", "common")
+	if !strings.Contains(out, "0xSECRET") {
+		t.Fatalf("expected store value with profile active, got: %s", out)
+	}
+}
+
+func TestIntegration_Resolve_MissingKey_ProfileHintMultipleProfiles(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	r.mustRun("set", "STORE_A", "val-a")
+	r.mustRun("set", "STORE_B", "val-b")
+
+	r.writeFile(".vars.yaml", `keys:
+  - MY_KEY
+profiles:
+  dev:
+    MY_KEY: STORE_A
+  prod:
+    MY_KEY: STORE_B
+`)
+
+	_, stderr := r.mustFail("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"))
+
+	if !strings.Contains(stderr, "not found in store") {
+		t.Fatalf("expected 'not found in store' error, got: %s", stderr)
+	}
+	// When multiple profiles map the same key, show all of them
+	if !strings.Contains(stderr, "dev") || !strings.Contains(stderr, "prod") {
+		t.Fatalf("expected both profile names in multi-profile hint, got: %s", stderr)
+	}
+	if strings.Contains(stderr, "vars resolve --profile common") {
+		t.Fatalf("should not suggest a specific profile when multiple match, got: %s", stderr)
+	}
+}
+
+func TestIntegration_Resolve_MissingKey_NoHintWhenNoProfiles(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	r.writeFile(".vars.yaml", `keys:
+  - MISSING_KEY
+`)
+
+	_, stderr := r.mustFail("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"))
+
+	if !strings.Contains(stderr, "not found in store") {
+		t.Fatalf("expected 'not found in store' error, got: %s", stderr)
+	}
+	if strings.Contains(stderr, "Hint:") {
+		t.Fatalf("should not show hint when no profiles exist, got: %s", stderr)
+	}
+}
+
+func TestIntegration_Resolve_MissingKey_GlobalProfileNotShown(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	r.mustRun("set", "GLOBAL_KEY", "global-val")
+
+	r.writeFile(".vars.yaml", `keys:
+  - MY_KEY
+profiles:
+  global:
+    MY_KEY: GLOBAL_KEY
+`)
+
+	// global: is always applied as fallback, so this should succeed.
+	// If it fails, the hint logic should not mention "global".
+	_, stderr, _ := r.run("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"))
+	// global profile maps MY_KEY → GLOBAL_KEY, which exists, so this should succeed.
+	if strings.Contains(stderr, "not found in store") {
+		t.Fatalf("global profile should resolve the key, got: %s", stderr)
 	}
 }
