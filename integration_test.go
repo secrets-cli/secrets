@@ -1080,6 +1080,32 @@ profiles:
 	}
 }
 
+// Discriminating test for the scope-fallback DIRECTION: only the intermediate
+// scope level exists. Correct (deepest-first) fallback strips "dev" first and
+// lands on main/RPC_URL. The previously-shipped bug stripped the outermost
+// scope first (main/dev/RPC_URL → dev/RPC_URL → RPC_URL), which would miss
+// everything here and fail. The older test above can't catch this because it
+// only stores the bare key, where both directions end at the same place.
+func TestIntegration_Resolve_HierarchicalFallback_StopsAtIntermediate(t *testing.T) {
+	r := newRunner(t)
+	r.initNoPassphrase()
+
+	// Intentionally NOT setting main/dev/RPC_URL, dev/RPC_URL, or bare RPC_URL.
+	r.mustRun("set", "main/RPC_URL", "https://main.rpc")
+
+	r.writeFile(".vars.yaml", `keys:
+  - RPC_URL
+profiles:
+  mainnet:
+    RPC_URL: main/dev/RPC_URL
+`)
+
+	out := r.mustRun("resolve", "-f", filepath.Join(r.workDir, ".vars.yaml"), "--profile", "mainnet")
+	if !strings.Contains(out, "https://main.rpc") {
+		t.Fatalf("deepest-first fallback should resolve main/dev/RPC_URL to main/RPC_URL, got: %s", out)
+	}
+}
+
 func TestIntegration_Ls_All(t *testing.T) {
 	r := newRunner(t)
 	r.initNoPassphrase()

@@ -278,18 +278,22 @@ func resolveProfileHint(envName, manifestPath, localPath, activeProfile string) 
 	return sb.String()
 }
 
-// resolveStoreKey tries the given key, then falls back by stripping successive
-// scope prefixes: "main/dev/RPC_URL" → "dev/RPC_URL" → "RPC_URL".
+// resolveStoreKey tries the given key, then falls back by stripping the deepest
+// scope one level at a time: "main/dev/RPC_URL" → "main/RPC_URL" → "RPC_URL".
+// The deepest (leaf-adjacent) scope is dropped first so outer scopes act as the
+// broader fallback, matching the documented hierarchical semantics.
 func resolveStoreKey(sockPath, key string) (string, error) {
 	for {
 		val, err := agent.Get(sockPath, key)
 		if err == nil {
 			return val, nil
 		}
-		i := strings.IndexByte(key, '/')
-		if i < 0 {
-			return "", err
+		// Drop the scope segment immediately before the leaf key name.
+		last := strings.LastIndexByte(key, '/')
+		if last < 0 {
+			return "", err // no scope left to strip
 		}
-		key = key[i+1:]
+		prev := strings.LastIndexByte(key[:last], '/')
+		key = key[:prev+1] + key[last+1:]
 	}
 }

@@ -88,5 +88,20 @@ test "$($BIN get RPC_URL)" = "https://rpc-v3.example.com"
 echo "--- version ---"
 contains "$($BIN --version)" "vars"
 
+echo "--- resolve hierarchical scope fallback (deepest-first) ---"
+# Bare RPC_URL already exists (https://rpc-v3.example.com). Add an intermediate
+# scope level with a DISTINCT value. Mapping to main/dev/RPC_URL must fall back
+# to main/RPC_URL (strip deepest scope first), NOT all the way to bare RPC_URL.
+$BIN set main/RPC_URL https://main.rpc
+cat > "$WORKDIR/.vars.yaml" <<'YAML'
+keys:
+  - RPC_URL
+profiles:
+  mainnet:
+    RPC_URL: main/dev/RPC_URL
+YAML
+eval "$($BIN resolve -f "$WORKDIR/.vars.yaml" --profile mainnet)"
+test "$RPC_URL" = "https://main.rpc"   # buggy outermost-first would yield rpc-v3
+
 echo ""
 echo "All smoke tests passed!"
