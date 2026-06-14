@@ -49,7 +49,7 @@ type Signer struct {
 }
 
 // Fingerprint returns the SHA256 fingerprint (e.g. "SHA256:…") that identifies
-// the key. It is stored in meta.json to pin which key a store requires.
+// the key. It is stored in vault.json to pin which key a store requires.
 func (s *Signer) Fingerprint() string { return s.fingerprint }
 
 // deriveKey returns the 32-byte wrapping key for a given per-file salt.
@@ -172,7 +172,7 @@ func FromFile(path string, passphrase []byte) (*Signer, error) {
 
 // FromAgent returns a Signer for the agent key matching fingerprint. If
 // fingerprint is empty, it selects the single usable key, erroring when zero or
-// several are present (callers should pin a fingerprint via meta.json).
+// several are present (callers should pin a fingerprint via vault.json).
 func FromAgent(ag agent.Agent, fingerprint string) (*Signer, error) {
 	keys, err := ag.List()
 	if err != nil {
@@ -211,6 +211,26 @@ func FromAgent(ag agent.Agent, fingerprint string) (*Signer, error) {
 	default:
 		return nil, errors.New("multiple SSH keys in ssh-agent; specify which one (set it at init or via VARS_SSH_KEY)")
 	}
+}
+
+// AgentSigners returns a Signer for every usable (Ed25519/RSA) key held by the
+// agent, in agent order. Used to offer key choices when creating a new store.
+func AgentSigners(ag agent.Agent) ([]*Signer, error) {
+	keys, err := ag.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing ssh-agent keys: %w", err)
+	}
+	var signers []*Signer
+	for _, k := range keys {
+		pub, err := ssh.ParsePublicKey(k.Marshal())
+		if err != nil {
+			continue
+		}
+		if supportedKeyType(pub) == nil {
+			signers = append(signers, fromAgentKey(ag, pub))
+		}
+	}
+	return signers, nil
 }
 
 // DialAgent connects to the ssh-agent at $SSH_AUTH_SOCK. The caller closes conn.

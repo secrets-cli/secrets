@@ -1,8 +1,8 @@
 package git
 
 import (
-	"os"
-	"path/filepath"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,122 +12,168 @@ import (
 // Compile-time contract: a *Repo is a valid vault.Committer.
 var _ vault.Committer = (*Repo)(nil)
 
-// requireWorkingGit skips when git is absent, or when the environment isolates
-// each git subprocess's filesystem view — some sandboxes do, which makes any
-// multi-invocation git workflow untestable (and is purely an environment trait,
-// not a code issue). Probe: a repo created by one git process must be visible
-// to the next. These tests run fully on a real filesystem (CI, dev machines).
-func requireWorkingGit(t *testing.T) {
-	t.Helper()
-	if !Available() {
-		t.Skip("git not available")
+// fakeGit is a controllable git double. It records the commands issued and
+// answers the few queries the Repo logic branches on, so the orchestration can
+// be tested deterministically without a real repository.
+type fakeGit struct {
+	calls       []string // each call as "arg arg arg", in order
+	staged      bool     // true => `diff --cached --quiet` reports staged changes (exit 1)
+	upstream    bool     // true => @{u} resolves
+	configEmail string   // output of `config user.email`
+	remotes     string   // output of `remote`
+	failOn      string   // if a command contains this substring, return an error
+}
+
+func (f *fakeGit) run(args ...string) (string, error) {
+	cmd := strings.Join(args, " ")
+	f.calls = append(f.calls, cmd)
+	if f.failOn != "" && strings.Contains(cmd, f.failOn) {
+		return "boom", errors.New("git failed")
 	}
-	dir := t.TempDir()
-	if _, err := run(dir, "init", "-q"); err != nil {
-		t.Skipf("git init failed: %v", err)
+	switch {
+	case cmd == "diff --cached --quiet":
+		if f.staged {
+			return "", errors.New("exit status 1")
+		}
+		return "", nil
+	case strings.Contains(cmd, "@{u}"):
+		if f.upstream {
+			return "origin/main", nil
+		}
+		return "", errors.New("no upstream")
+	case cmd == "symbolic-ref --short HEAD":
+		return "main\n", nil
+	case cmd == "remote":
+		return f.remotes, nil
+	case cmd == "config user.email":
+		return f.configEmail, nil
 	}
-	out, err := run(dir, "rev-parse", "--is-inside-work-tree")
-	if err != nil || strings.TrimSpace(out) != "true" {
-		t.Skip("environment isolates nested git subprocesses; run git tests on a real filesystem")
+	return "", nil
+}
+
+func repoWith(f *fakeGit) *Repo { return &Repo{dir: "/store", run: f.run} }
+
+func (f *fakeGit) issued(substr string) bool {
+	for _, c := range f.calls {
+		if strings.Contains(c, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCommit_SkipsWhenNothingStaged(t *testing.T) {
+	f := &fakeGit{staged: false}
+	if err := repoWith(f).Commit("set RPC_URL"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	want := []string{"add -A", "diff --cached --quiet"}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Fatalf("calls = %v, want %v (no commit when nothing staged)", f.calls, want)
 	}
 }
 
-func TestRepo_InitAndCommit(t *testing.T) {
-	requireWorkingGit(t)
-	dir := t.TempDir()
-	if err := Init(dir); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	if !IsRepo(dir) {
-		t.Fatal("dir should be a git repo after Init")
-	}
-	r := New(dir)
-
-	// Nothing changed yet → Commit is a no-op, not an error.
-	if err := r.Commit("noop"); err != nil {
-		t.Fatalf("empty commit should be a no-op: %v", err)
-	}
-
-	os.WriteFile(filepath.Join(dir, "RPC_URL.age"), []byte("ciphertext"), 0o600)
-	if err := r.Commit("set RPC_URL"); err != nil {
+func TestCommit_CommitsWhenStaged(t *testing.T) {
+	f := &fakeGit{staged: true}
+	if err := repoWith(f).Commit("set RPC_URL"); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
+	if !f.issued("commit -q -m set RPC_URL") {
+		t.Fatalf("expected a commit with the message, calls = %v", f.calls)
+	}
+}
+
+func TestCommit_PropagatesError(t *testing.T) {
+	f := &fakeGit{staged: true, failOn: "commit"}
+	if err := repoWith(f).Commit("x"); err == nil {
+		t.Fatal("commit failure should propagate")
+	}
+}
+
+func TestSync_FirstPushSetsUpstream(t *testing.T) {
+	f := &fakeGit{remotes: "origin\n", upstream: false}
+	if err := repoWith(f).Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !f.issued("push -u origin main") {
+		t.Fatalf("first sync should set upstream, calls = %v", f.calls)
+	}
+	if f.issued("pull") {
+		t.Fatalf("first sync should not pull, calls = %v", f.calls)
+	}
+}
+
+func TestSync_PullThenPushWhenUpstream(t *testing.T) {
+	f := &fakeGit{remotes: "origin\n", upstream: true}
+	if err := repoWith(f).Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !f.issued("pull --rebase") || !f.issued("push") {
+		t.Fatalf("sync with upstream should pull then push, calls = %v", f.calls)
+	}
+	// push -u must NOT be used when an upstream already exists.
+	if f.issued("push -u") {
+		t.Fatalf("should not re-set upstream, calls = %v", f.calls)
+	}
+}
+
+func TestSync_NoRemoteErrors(t *testing.T) {
+	f := &fakeGit{remotes: ""}
+	if err := repoWith(f).Sync(); err == nil {
+		t.Fatal("sync without a remote should error")
+	}
+	if f.issued("push") || f.issued("pull") {
+		t.Fatalf("must not push/pull without a remote, calls = %v", f.calls)
+	}
+}
+
+func TestInit_SetsIdentityWhenMissing(t *testing.T) {
+	f := &fakeGit{configEmail: ""}
+	if err := repoWith(f).Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !f.issued("init -q") {
+		t.Fatalf("expected git init, calls = %v", f.calls)
+	}
+	if !f.issued("config user.email vars@localhost") || !f.issued("config user.name vars") {
+		t.Fatalf("expected default identity to be set, calls = %v", f.calls)
+	}
+}
+
+func TestInit_KeepsExistingIdentity(t *testing.T) {
+	f := &fakeGit{configEmail: "me@example.com\n"}
+	if err := repoWith(f).Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if f.issued("config user.email vars@localhost") {
+		t.Fatalf("must not override an existing identity, calls = %v", f.calls)
+	}
+}
+
+func TestHasRemote(t *testing.T) {
+	if !repoWith(&fakeGit{remotes: "origin\n"}).HasRemote() {
+		t.Fatal("expected HasRemote true")
+	}
+	if repoWith(&fakeGit{remotes: ""}).HasRemote() {
+		t.Fatal("expected HasRemote false")
+	}
+}
+
+func TestLog_ParsesLines(t *testing.T) {
+	f := &fakeGit{}
+	// Override run to return canned log output.
+	r := &Repo{dir: "/store", run: func(args ...string) (string, error) {
+		f.calls = append(f.calls, strings.Join(args, " "))
+		return "abc123 set RPC_URL (2026-06-13)\ndef456 mv RPC_URL R2 (2026-06-12)\n", nil
+	}}
 	lines, err := r.Log("RPC_URL.age")
 	if err != nil {
 		t.Fatalf("log: %v", err)
 	}
-	if len(lines) != 1 || !strings.Contains(lines[0], "set RPC_URL") {
-		t.Fatalf("log = %v, want one 'set RPC_URL' entry", lines)
+	if len(lines) != 2 || !strings.Contains(lines[0], "set RPC_URL") {
+		t.Fatalf("log lines = %v", lines)
 	}
-
-	// Committing again with no change must not create a second commit.
-	if err := r.Commit("again"); err != nil {
-		t.Fatalf("second no-op commit: %v", err)
-	}
-	if lines, _ := r.Log("RPC_URL.age"); len(lines) != 1 {
-		t.Fatalf("expected still 1 commit, got %d", len(lines))
-	}
-}
-
-func TestRepo_HasRemote(t *testing.T) {
-	requireWorkingGit(t)
-	dir := t.TempDir()
-	Init(dir)
-	r := New(dir)
-	if r.HasRemote() {
-		t.Fatal("fresh repo should have no remote")
-	}
-	if _, err := run(dir, "remote", "add", "origin", t.TempDir()); err != nil {
-		t.Fatalf("remote add: %v", err)
-	}
-	if !r.HasRemote() {
-		t.Fatal("expected a remote after adding one")
-	}
-}
-
-func TestRepo_SyncFirstPushThenUpdate(t *testing.T) {
-	requireWorkingGit(t)
-	// Bare remote.
-	remote := t.TempDir()
-	if _, err := run(remote, "init", "--bare", "-q"); err != nil {
-		t.Fatalf("bare init: %v", err)
-	}
-
-	dir := t.TempDir()
-	if err := Init(dir); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	r := New(dir)
-
-	// Sync with no remote should explain itself.
-	if err := r.Sync(); err == nil {
-		t.Fatal("Sync without a remote should error")
-	}
-
-	os.WriteFile(filepath.Join(dir, "a.age"), []byte("x"), 0o600)
-	r.Commit("set a")
-	if _, err := run(dir, "remote", "add", "origin", remote); err != nil {
-		t.Fatalf("remote add: %v", err)
-	}
-
-	// First sync: no upstream yet → should push and set upstream.
-	if err := r.Sync(); err != nil {
-		t.Fatalf("first sync: %v", err)
-	}
-
-	// Second commit + sync: upstream now exists → pull --rebase + push.
-	os.WriteFile(filepath.Join(dir, "b.age"), []byte("y"), 0o600)
-	r.Commit("set b")
-	if err := r.Sync(); err != nil {
-		t.Fatalf("second sync: %v", err)
-	}
-
-	// The bare remote should now hold a branch with both commits.
-	out, err := run(remote, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("remote log: %v", err)
-	}
-	if !strings.Contains(out, "set a") || !strings.Contains(out, "set b") {
-		t.Fatalf("remote missing commits:\n%s", out)
+	if !f.issued("-- RPC_URL.age") {
+		t.Fatalf("log should scope to the file, calls = %v", f.calls)
 	}
 }

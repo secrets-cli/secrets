@@ -20,7 +20,7 @@ import (
 
 const (
 	// MetaFileName is the unencrypted store descriptor, committed with the store.
-	MetaFileName = "meta.json"
+	MetaFileName = "vault.json"
 	ageExt       = ".age"
 
 	dirPerm  = 0o700
@@ -86,7 +86,7 @@ func ReadMeta(dir string) (Meta, error) {
 	return m, nil
 }
 
-// Init creates the store directory and writes meta.json. It errors if a store
+// Init creates the store directory and writes vault.json. It errors if a store
 // already exists. git initialization is the caller's concern.
 func Init(dir string, meta Meta) error {
 	if Exists(dir) {
@@ -213,7 +213,7 @@ func (v *Vault) List() ([]string, error) {
 			return nil
 		}
 		if !strings.HasSuffix(d.Name(), ageExt) {
-			return nil // meta.json, RECOVERY.md, anything non-secret
+			return nil // vault.json, RECOVERY.md, anything non-secret
 		}
 		rel, err := filepath.Rel(v.dir, path)
 		if err != nil {
