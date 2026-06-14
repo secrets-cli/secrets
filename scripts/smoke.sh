@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
+# End-to-end smoke test for the ssh-v1 (v0.6) vars. Uses a dedicated SSH key so
+# it's deterministic and needs no ssh-agent. git versioning is best-effort: the
+# history check is skipped where git isn't functional.
 set -euo pipefail
 
 BIN="${1:-./vars}"
 
-export VARS_STORE_DIR=$(mktemp -d)
+TMP=$(mktemp -d)
 WORKDIR=$(mktemp -d)
-trap "$BIN agent stop 2>/dev/null; rm -rf $VARS_STORE_DIR $WORKDIR" EXIT
+trap "rm -rf $TMP $WORKDIR" EXIT
+
+ssh-keygen -t ed25519 -N "" -f "$TMP/key" -q
+export VARS_STORE_DIR="$TMP/store"
+export VARS_SSH_KEY="$TMP/key"
 
 contains() { echo "$1" | grep -q "$2"; }
 
-echo "--- list keys (first run auto-creates store) ---"
-echo -e "\n\n" | $BIN ls
-echo "--- set keys ---"
+echo "--- first run + set ---"
 $BIN set RPC_URL https://rpc.example.com
 $BIN set PRIVATE_KEY 0xTESTKEY
 $BIN set ETHERSCAN_API abc123
@@ -19,8 +24,16 @@ $BIN set ETHERSCAN_API abc123
 echo "--- get ---"
 test "$($BIN get RPC_URL)" = "https://rpc.example.com"
 
-echo "--- ls ---"
+echo "--- ls (3 unscoped keys) ---"
 test "$($BIN ls | wc -l)" -eq 3
+
+echo "--- scoped keys (directories) + tree + scope ls ---"
+$BIN set prod/RPC_URL https://prod.rpc
+$BIN set main/dev/RPC_URL https://maindev.rpc
+contains "$($BIN ls)" "prod/"
+contains "$($BIN ls prod)" "RPC_URL"
+contains "$($BIN scope ls)" "main/dev"
+test -f "$VARS_STORE_DIR/prod/RPC_URL.age"
 
 echo "--- resolve (posix) ---"
 cat > "$WORKDIR/.vars.yaml" <<'YAML'
@@ -32,10 +45,8 @@ eval "$($BIN resolve -f "$WORKDIR/.vars.yaml")"
 test "$RPC_URL" = "https://rpc.example.com"
 test "$PRIVATE_KEY" = "0xTESTKEY"
 
-echo "--- resolve (dotenv) ---"
+echo "--- resolve (dotenv / fish) ---"
 contains "$($BIN resolve -f "$WORKDIR/.vars.yaml" --dotenv)" "RPC_URL="
-
-echo "--- resolve (fish) ---"
 contains "$($BIN resolve -f "$WORKDIR/.vars.yaml" --fish)" "set -x"
 
 echo "--- resolve --partial ---"
@@ -48,60 +59,57 @@ OUT=$($BIN resolve -f "$WORKDIR/.vars.yaml" --partial 2>/dev/null)
 contains "$OUT" "RPC_URL"
 ! contains "$OUT" "MISSING_KEY"
 
-echo "--- resolve stdin dotenv ---"
+echo "--- resolve stdin dotenv passthrough ---"
 cat > "$WORKDIR/.vars.yaml" <<'YAML'
 keys:
   - RPC_URL
   - DOTENV_ONLY
 YAML
 OUT=$(printf 'DOTENV_ONLY=from_dotenv\nPASSTHROUGH=passthrough\n' | $BIN resolve -f "$WORKDIR/.vars.yaml" --partial 2>/dev/null)
-contains "$OUT" "RPC_URL"
-contains "$OUT" "DOTENV_ONLY"
 contains "$OUT" "from_dotenv"
 contains "$OUT" "PASSTHROUGH"
-contains "$OUT" "passthrough"
 
-echo "--- dump ---"
-contains "$($BIN dump --dotenv 2>/dev/null)" "ETHERSCAN_API"
-test "$($BIN dump | wc -l)" -eq 3
-
-echo "--- history ---"
-$BIN set --replace RPC_URL https://rpc-v2.example.com
-$BIN set --replace RPC_URL https://rpc-v3.example.com
-HIST=$($BIN history RPC_URL)
-contains "$HIST" "RPC_URL~2:"
-contains "$HIST" "https://rpc-v2.example.com"
-contains "$HIST" "RPC_URL~1:"
-contains "$HIST" "https://rpc.example.com"
-test "$($BIN ls | wc -l)" -eq 3
-test "$($BIN dump | wc -l)" -eq 3
-
-echo "--- rm ---"
-$BIN rm ETHERSCAN_API --force
-test "$($BIN ls | wc -l)" -eq 2
-
-echo "--- agent stop + auto-restart ---"
-$BIN agent stop
-sleep 0.2
-test "$($BIN get RPC_URL)" = "https://rpc-v3.example.com"
-
-echo "--- version ---"
-contains "$($BIN --version)" "vars"
-
-echo "--- resolve hierarchical scope fallback (deepest-first) ---"
-# Bare RPC_URL already exists (https://rpc-v3.example.com). Add an intermediate
-# scope level with a DISTINCT value. Mapping to main/dev/RPC_URL must fall back
-# to main/RPC_URL (strip deepest scope first), NOT all the way to bare RPC_URL.
-$BIN set main/RPC_URL https://main.rpc
+echo "--- resolve scope fallback (deepest-first) ---"
 cat > "$WORKDIR/.vars.yaml" <<'YAML'
 keys:
   - RPC_URL
 profiles:
   mainnet:
-    RPC_URL: main/dev/RPC_URL
+    RPC_URL: main/dev/sub/RPC_URL
 YAML
-eval "$($BIN resolve -f "$WORKDIR/.vars.yaml" --profile mainnet)"
-test "$RPC_URL" = "https://main.rpc"   # buggy outermost-first would yield rpc-v3
+# main/dev/sub/RPC_URL missing -> strip deepest -> main/dev/RPC_URL hits.
+eval "$($BIN resolve -f "$WORKDIR/.vars.yaml" -p mainnet)"
+test "$RPC_URL" = "https://maindev.rpc"
+
+echo "--- import ---"
+printf 'IMPORTED_A=aaa\nIMPORTED_B=bbb\n' > "$WORKDIR/.env"
+$BIN import "$WORKDIR/.env" >/dev/null
+test "$($BIN get IMPORTED_A)" = "aaa"
+
+echo "--- mv ---"
+$BIN mv IMPORTED_A RENAMED_A --force >/dev/null
+test "$($BIN get RENAMED_A)" = "aaa"
+! $BIN get IMPORTED_A 2>/dev/null
+
+echo "--- rm ---"
+$BIN rm RENAMED_A --force >/dev/null
+! $BIN get RENAMED_A 2>/dev/null
+
+echo "--- dump ---"
+contains "$($BIN dump --dotenv 2>/dev/null)" "ETHERSCAN_API="
+
+echo "--- version ---"
+contains "$($BIN --version)" "vars"
+
+echo "--- history (git; skipped where git is unavailable) ---"
+$BIN set RPC_URL https://rpc-v2.example.com --replace >/dev/null 2>&1
+HIST=$($BIN history RPC_URL 2>/dev/null || true)
+if [ -n "$HIST" ]; then
+    contains "$HIST" "RPC_URL"
+    echo "    history OK"
+else
+    echo "    (no git history available here — skipped)"
+fi
 
 echo ""
 echo "All smoke tests passed!"

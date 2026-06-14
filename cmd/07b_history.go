@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/agent"
+	"github.com/vars-cli/vars/internal/git"
 )
 
 func init() {
@@ -15,26 +15,32 @@ func init() {
 
 var historyCmd = &cobra.Command{
 	Use:   "history <key>",
-	Short: "Show value history for a key (newest first)",
+	Short: "Show a key's change history (newest first)",
+	Long:  `List the git commits that touched a key. Requires the store to be a git repo.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-
-		sockPath := agentSocketPath()
-
-		if _, err := agent.Get(sockPath, args[0]); err != nil {
+		if !v.Has(args[0]) {
 			return UserError(fmt.Sprintf("key %q not found in store", args[0]))
 		}
 
-		keys, values, err := agent.History(sockPath, args[0])
+		dir := storeDir()
+		if !git.Available() || !git.IsRepo(dir) {
+			return UserError("history is unavailable: the store is not a git repo")
+		}
+		lines, err := git.New(dir).Log(args[0] + ".age")
 		if err != nil {
 			return InternalError(err.Error())
 		}
-
-		for i, k := range keys {
-			fmt.Fprintf(os.Stdout, "%s:\t%s\n", k, values[i])
+		if len(lines) == 0 {
+			fmt.Fprintln(os.Stderr, "No history yet.")
+			return nil
+		}
+		for _, l := range lines {
+			fmt.Fprintln(os.Stdout, l)
 		}
 		return nil
 	},

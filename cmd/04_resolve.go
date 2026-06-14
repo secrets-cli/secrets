@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/agent"
 	"github.com/vars-cli/vars/internal/envfile"
 	"github.com/vars-cli/vars/internal/format"
 	"github.com/vars-cli/vars/internal/manifest"
+	"github.com/vars-cli/vars/internal/vault"
 )
 
 var (
@@ -77,20 +77,18 @@ Mapping values may use special prefixes:
 			fmt.Fprintf(os.Stderr, "vars: warning: profile %q not found in manifest\n", resolveProfile)
 		}
 
-		sockPath := agentSocketPath()
-
-		// Check stdin pipe before touching the agent — if stdin is piped, we
-		// cannot prompt interactively, so fail fast if the agent isn't already up.
+		// A piped stdin means a dotenv fallback. We can't prompt when piped, so a
+		// missing store is a hard error rather than the interactive create wizard.
 		stdinPiped := func() bool {
 			fi, err := os.Stdin.Stat()
 			return err == nil && fi.Mode()&os.ModeCharDevice == 0
 		}()
-
-		if stdinPiped && !agent.IsRunning(sockPath) {
-			return UserError("agent is not running; start it first with `vars agent`")
+		if stdinPiped && !vault.Exists(storeDir()) {
+			return UserError("no store found; create one first by running `vars`")
 		}
 
-		if err := ensureAgent(); err != nil {
+		vlt, err := openVault()
+		if err != nil {
 			return err
 		}
 
@@ -128,7 +126,7 @@ Mapping values may use special prefixes:
 				entries = append(entries, entry{v.EnvName, v.InlineValue, "manifest"})
 				continue
 			}
-			val, lookupErr := resolveStoreKey(sockPath, v.StoreKey)
+			val, lookupErr := resolveStoreKey(vlt, v.StoreKey)
 			if v.HasDefault && (lookupErr != nil || val == "") {
 				entries = append(entries, entry{v.EnvName, v.DefaultValue, "manifest"})
 				continue
@@ -282,11 +280,11 @@ func resolveProfileHint(envName, manifestPath, localPath, activeProfile string) 
 // scope one level at a time: "main/dev/RPC_URL" → "main/RPC_URL" → "RPC_URL".
 // The deepest (leaf-adjacent) scope is dropped first so outer scopes act as the
 // broader fallback, matching the documented hierarchical semantics.
-func resolveStoreKey(sockPath, key string) (string, error) {
+func resolveStoreKey(v *vault.Vault, key string) (string, error) {
 	for {
-		val, err := agent.Get(sockPath, key)
+		val, err := v.Get(key)
 		if err == nil {
-			return val, nil
+			return string(val), nil
 		}
 		// Drop the scope segment immediately before the leaf key name.
 		last := strings.LastIndexByte(key, '/')

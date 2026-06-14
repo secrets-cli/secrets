@@ -7,8 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-
-	"github.com/vars-cli/vars/internal/agent"
 )
 
 var (
@@ -36,52 +34,40 @@ shell history).`,
 
 		key := args[0]
 
-		if strings.ContainsRune(key, '~') {
-			return UserError("key names may not contain '~' (reserved for history entries)")
-		}
-
 		var value string
 		if len(args) == 2 {
 			value = args[1]
 		} else {
-			v, err := stdinPrompter().Value("Value: ")
+			v, err := stdinPrompter().Secret("Value: ")
 			if err != nil {
 				return UserError(err.Error())
 			}
 			value = v
 		}
 
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-
-		sockPath := agentSocketPath()
 		isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 
-		// Conflict resolution loop (handles rename re-checks)
+		// Conflict resolution loop (handles rename re-checks).
 		for {
-			existing, getErr := agent.Get(sockPath, key)
-
+			existing, getErr := v.Get(key)
 			if getErr != nil {
-				// New key — no conflict
-				break
+				break // new key — no conflict
 			}
-
-			if existing == value {
+			if string(existing) == value {
 				fmt.Fprintln(os.Stderr, "Already set, nothing to do.")
 				return nil
 			}
-
-			// Key exists with a different value
 			if setSkip {
 				fmt.Fprintln(os.Stderr, "Skipped.")
 				return nil
 			}
-
 			if setReplace {
 				break
 			}
-
 			if !isTTY {
 				return UserError("key already exists; use --replace or --skip")
 			}
@@ -91,7 +77,6 @@ shell history).`,
 			if err != nil {
 				return UserError(err.Error())
 			}
-
 			switch c := strings.ToLower(strings.TrimSpace(choice)); {
 			case strings.HasPrefix(c, "r"):
 				// proceed to set below
@@ -114,12 +99,13 @@ shell history).`,
 			break
 		}
 
-		if err := agent.Set(sockPath, []agent.SetItem{{Key: key, Value: value}}); err != nil {
+		if err := v.Set(key, []byte(value)); err != nil {
 			return UserError(err.Error())
 		}
 
 		printManifestHint(key)
 		fmt.Fprintln(os.Stderr, "Saved.")
+		hintSync(storeDir())
 		return nil
 	},
 }

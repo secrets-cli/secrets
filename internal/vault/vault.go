@@ -39,6 +39,14 @@ type Committer interface {
 	Commit(message string) error
 }
 
+// History optionally lets the vault read past versions of a key. A Committer
+// that also implements History enables `GetVersion` (git-backed).
+type History interface {
+	// VersionContent returns the raw stored bytes of relpath n commits back
+	// (n=0 current, n=1 previous, …).
+	VersionContent(relpath string, n int) ([]byte, error)
+}
+
 // Vault is a per-file encrypted store rooted at dir.
 type Vault struct {
 	dir       string
@@ -121,6 +129,24 @@ func (v *Vault) Get(key string) ([]byte, error) {
 	return v.backend.Decrypt(ciphertext)
 }
 
+// GetVersion returns the value of key as of n versions ago (n=1 = previous,
+// n=0 = current), read from git history and decrypted with the current key.
+// Requires the committer to also implement History.
+func (v *Vault) GetVersion(key string, n int) ([]byte, error) {
+	h, ok := v.committer.(History)
+	if !ok {
+		return nil, fmt.Errorf("version history is unavailable (store is not git-backed)")
+	}
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+	ciphertext, err := h.VersionContent(key+ageExt, n)
+	if err != nil {
+		return nil, err
+	}
+	return v.backend.Decrypt(ciphertext)
+}
+
 // Has reports whether key exists, without decrypting.
 func (v *Vault) Has(key string) bool {
 	path, err := v.pathFor(key)
@@ -131,8 +157,32 @@ func (v *Vault) Has(key string) bool {
 	return err == nil
 }
 
+// Item is a key/value pair for batch writes.
+type Item struct {
+	Key   string
+	Value []byte
+}
+
 // Set encrypts value and writes it to <key>.age, then commits.
 func (v *Vault) Set(key string, value []byte) error {
+	if err := v.writeKey(key, value); err != nil {
+		return err
+	}
+	return v.commit("set " + key)
+}
+
+// SetMany writes several keys and commits once with the given message.
+func (v *Vault) SetMany(items []Item, message string) error {
+	for _, it := range items {
+		if err := v.writeKey(it.Key, it.Value); err != nil {
+			return err
+		}
+	}
+	return v.commit(message)
+}
+
+// writeKey encrypts and writes one key's file without committing.
+func (v *Vault) writeKey(key string, value []byte) error {
 	path, err := v.pathFor(key)
 	if err != nil {
 		return err
@@ -144,29 +194,41 @@ func (v *Vault) Set(key string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(path, ciphertext, filePerm); err != nil {
-		return err
-	}
-	return v.commit("set " + key)
+	return atomicWrite(path, ciphertext, filePerm)
 }
 
 // Delete removes key (and prunes now-empty scope directories), then commits.
 func (v *Vault) Delete(key string) error {
+	if err := v.removeKey(key); err != nil {
+		return err
+	}
+	return v.commit("rm " + key)
+}
+
+// DeleteMany removes several keys and commits once with the given message.
+func (v *Vault) DeleteMany(keys []string, message string) error {
+	for _, key := range keys {
+		if err := v.removeKey(key); err != nil {
+			return err
+		}
+	}
+	return v.commit(message)
+}
+
+// removeKey deletes one key's file and prunes empty scope dirs, without committing.
+func (v *Vault) removeKey(key string) error {
 	path, err := v.pathFor(key)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); err != nil {
+	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("key %q not found in store", key)
 		}
 		return err
 	}
-	if err := os.Remove(path); err != nil {
-		return err
-	}
 	v.pruneEmptyDirs(filepath.Dir(path))
-	return v.commit("rm " + key)
+	return nil
 }
 
 // Rename moves a key. No re-encryption: the wrapping key derives from the
@@ -278,6 +340,9 @@ func validateKey(key string) error {
 	}
 	if strings.ContainsAny(key, "\x00\\") {
 		return fmt.Errorf("invalid key %q: contains an illegal character", key)
+	}
+	if strings.ContainsRune(key, '~') {
+		return fmt.Errorf("invalid key %q: '~' is reserved for version references (KEY~N)", key)
 	}
 	for _, seg := range strings.Split(key, "/") {
 		if seg == "" || seg == "." || seg == ".." {

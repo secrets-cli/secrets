@@ -53,6 +53,10 @@ func (b *Backend) Encrypt(plaintext []byte) ([]byte, error) {
 func (b *Backend) Decrypt(ciphertext []byte) ([]byte, error) {
 	r, err := age.Decrypt(bytes.NewReader(ciphertext), &identity{b.signer})
 	if err != nil {
+		var noMatch *age.NoIdentityMatchError
+		if errors.As(err, &noMatch) {
+			return nil, fmt.Errorf("not encrypted to your SSH key (%s)", b.signer.Fingerprint())
+		}
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}
 	return io.ReadAll(r)
@@ -116,7 +120,10 @@ func (i *identity) Unwrap(stanzas []*age.Stanza) ([]byte, error) {
 		nonce, sealed := s.Body[:aead.NonceSize()], s.Body[aead.NonceSize():]
 		fileKey, err := aead.Open(nil, nonce, sealed, nil)
 		if err != nil {
-			return nil, fmt.Errorf("vars-ssh-v1: could not unwrap file key (wrong SSH key?): %w", err)
+			// This stanza isn't for our key. Keep going: a file may carry
+			// several vars-ssh-v1 stanzas (one per recipient/key) once
+			// multi-recipient support is added.
+			continue
 		}
 		return fileKey, nil
 	}

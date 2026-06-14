@@ -117,6 +117,28 @@ func (r *Repo) Log(relpath string) ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+// VersionContent returns the raw stored bytes of relpath as of n commits back
+// that touched it (n=0 = current, n=1 = previous, …), via git. The caller
+// decrypts. .age files are binary, so git emits them unmodified.
+func (r *Repo) VersionContent(relpath string, n int) ([]byte, error) {
+	logOut, err := r.run("log", "--format=%H", "--", relpath)
+	if err != nil {
+		return nil, fmt.Errorf("git log: %w: %s", err, logOut)
+	}
+	commits := strings.Fields(strings.TrimSpace(logOut))
+	if len(commits) == 0 {
+		return nil, fmt.Errorf("%q has no history", relpath)
+	}
+	if n < 0 || n >= len(commits) {
+		return nil, fmt.Errorf("only %d previous version(s) exist", len(commits)-1)
+	}
+	out, err := r.run("show", commits[n]+":"+relpath)
+	if err != nil {
+		return nil, fmt.Errorf("git show: %w: %s", err, out)
+	}
+	return []byte(out), nil
+}
+
 // Passthrough runs `git <args>` in the store dir with the process's own stdio,
 // backing `vars git …`. It returns the command error (callers may inspect exit code).
 func (r *Repo) Passthrough(args []string) error {

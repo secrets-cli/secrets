@@ -163,7 +163,7 @@ func TestVault_GetMissing(t *testing.T) {
 
 func TestVault_RejectsTraversalKeys(t *testing.T) {
 	v := newVault(t, nil)
-	for _, bad := range []string{"", "/abs", "trailing/", "../escape", "a/../b", "a//b", "nul\x00key"} {
+	for _, bad := range []string{"", "/abs", "trailing/", "../escape", "a/../b", "a//b", "nul\x00key", "ver~2"} {
 		if err := v.Set(bad, []byte("x")); err == nil {
 			t.Fatalf("Set(%q) should have been rejected", bad)
 		}
@@ -186,6 +186,51 @@ func TestVault_CommitsOnMutation(t *testing.T) {
 	want := []string{"set K", "set scope/K2", "mv K K3", "rm scope/K2"}
 	if !reflect.DeepEqual(fc.msgs, want) {
 		t.Fatalf("commit messages = %v, want %v", fc.msgs, want)
+	}
+}
+
+func TestVault_SetManyCommitsOnce(t *testing.T) {
+	fc := &fakeCommitter{}
+	v := newVault(t, fc)
+	items := []Item{{"A", []byte("1")}, {"scope/B", []byte("2")}, {"C", []byte("3")}}
+	if err := v.SetMany(items, "import 3 keys"); err != nil {
+		t.Fatalf("setmany: %v", err)
+	}
+	if len(fc.msgs) != 1 || fc.msgs[0] != "import 3 keys" {
+		t.Fatalf("expected one commit %q, got %v", "import 3 keys", fc.msgs)
+	}
+	for _, it := range items {
+		got, err := v.Get(it.Key)
+		if err != nil || string(got) != string(it.Value) {
+			t.Fatalf("get %s: %q err %v", it.Key, got, err)
+		}
+	}
+}
+
+func TestVault_DeleteManyCommitsOnce(t *testing.T) {
+	fc := &fakeCommitter{}
+	v := newVault(t, fc)
+	v.SetMany([]Item{{"A", []byte("1")}, {"B", []byte("2")}}, "seed")
+	fc.msgs = nil
+	if err := v.DeleteMany([]string{"A", "B"}, "rm 2 keys"); err != nil {
+		t.Fatalf("deletemany: %v", err)
+	}
+	if len(fc.msgs) != 1 || fc.msgs[0] != "rm 2 keys" {
+		t.Fatalf("expected one commit, got %v", fc.msgs)
+	}
+	if v.Has("A") || v.Has("B") {
+		t.Fatal("keys should be gone")
+	}
+}
+
+func TestVault_GetVersionWithoutHistory(t *testing.T) {
+	// nil committer → no history.
+	if _, err := newVault(t, nil).GetVersion("K", 1); err == nil {
+		t.Fatal("GetVersion without a committer should error")
+	}
+	// a Committer that isn't a History → still no version access.
+	if _, err := newVault(t, &fakeCommitter{}).GetVersion("K", 1); err == nil {
+		t.Fatal("GetVersion with a non-History committer should error")
 	}
 }
 

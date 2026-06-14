@@ -7,8 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-
-	"github.com/vars-cli/vars/internal/agent"
 )
 
 var mvForce bool
@@ -23,14 +21,13 @@ var mvCmd = &cobra.Command{
 	Short: "Rename a key in the store",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-		sockPath := agentSocketPath()
 
 		if !mvForce {
-			isTTY := term.IsTerminal(int(os.Stdin.Fd()))
-			if !isTTY {
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				return UserError("rename requires confirmation; use --force for non-interactive use")
 			}
 			fmt.Fprintf(os.Stderr, "Rename %s → %s\n", args[0], args[1])
@@ -44,11 +41,12 @@ var mvCmd = &cobra.Command{
 			}
 		}
 
-		if err := agent.Rename(sockPath, args[0], args[1]); err != nil {
+		if err := v.Rename(args[0], args[1]); err != nil {
 			return UserError(err.Error())
 		}
 
 		fmt.Fprintf(os.Stderr, "Renamed %s → %s\n", args[0], args[1])
+		hintSync(storeDir())
 		return nil
 	},
 }

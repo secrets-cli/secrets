@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/store"
+	"github.com/vars-cli/vars/internal/vault"
 )
 
 func init() {
@@ -33,9 +33,9 @@ a single age-encrypted store.`,
 		}
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// First-time setup: no store yet — run the wizard.
-		if !store.Exists() {
-			if err := ensureAgent(); err != nil {
+		// First-time setup: no store yet — create it.
+		if !vault.Exists(storeDir()) {
+			if err := firstRun(storeDir()); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stderr, "\nYou're all set. Try:")

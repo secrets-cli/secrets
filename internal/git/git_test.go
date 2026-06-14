@@ -21,6 +21,8 @@ type fakeGit struct {
 	upstream    bool     // true => @{u} resolves
 	configEmail string   // output of `config user.email`
 	remotes     string   // output of `remote`
+	logOutput   string   // output of `log --format=%H -- <path>`
+	showOutput  string   // output of `show <commit>:<path>`
 	failOn      string   // if a command contains this substring, return an error
 }
 
@@ -47,6 +49,10 @@ func (f *fakeGit) run(args ...string) (string, error) {
 		return f.remotes, nil
 	case cmd == "config user.email":
 		return f.configEmail, nil
+	case strings.HasPrefix(cmd, "log --format=%H"):
+		return f.logOutput, nil
+	case strings.HasPrefix(cmd, "show "):
+		return f.showOutput, nil
 	}
 	return "", nil
 }
@@ -156,6 +162,34 @@ func TestHasRemote(t *testing.T) {
 	}
 	if repoWith(&fakeGit{remotes: ""}).HasRemote() {
 		t.Fatal("expected HasRemote false")
+	}
+}
+
+func TestVersionContent_SelectsNthCommit(t *testing.T) {
+	f := &fakeGit{logOutput: "h0\nh1\nh2\n", showOutput: "CIPHERTEXT"}
+	got, err := repoWith(f).VersionContent("RPC_URL.age", 2)
+	if err != nil {
+		t.Fatalf("VersionContent: %v", err)
+	}
+	if string(got) != "CIPHERTEXT" {
+		t.Fatalf("got %q", got)
+	}
+	if !f.issued("show h2:RPC_URL.age") {
+		t.Fatalf("expected show of h2, calls=%v", f.calls)
+	}
+}
+
+func TestVersionContent_OutOfBounds(t *testing.T) {
+	f := &fakeGit{logOutput: "h0\nh1\n"} // current + 1 previous
+	if _, err := repoWith(f).VersionContent("K.age", 5); err == nil {
+		t.Fatal("expected out-of-bounds error")
+	}
+}
+
+func TestVersionContent_NoHistory(t *testing.T) {
+	f := &fakeGit{logOutput: ""}
+	if _, err := repoWith(f).VersionContent("K.age", 1); err == nil {
+		t.Fatal("expected no-history error")
 	}
 }
 

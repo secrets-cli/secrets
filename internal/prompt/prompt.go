@@ -1,8 +1,5 @@
-// Package prompt provides terminal I/O for passphrases, values, and confirmations.
-//
-// The Prompter type wraps an io.Reader with buffering so multiple
-// sequential reads work correctly. For real terminal usage, passphrase
-// prompts show asterisks while typing; value prompts are visible.
+// Package prompt provides simple interactive terminal prompts over a shared
+// buffered reader, so sequential reads work correctly.
 package prompt
 
 import (
@@ -19,17 +16,14 @@ import (
 type Prompter struct {
 	r     *bufio.Reader
 	w     io.Writer
-	isTTY bool
 	fd    int
+	isTTY bool
 }
 
 // New creates a Prompter from a reader and writer.
 // For testing, pass strings.NewReader / bytes.Buffer.
 func New(r io.Reader, w io.Writer) *Prompter {
-	p := &Prompter{
-		r: bufio.NewReader(r),
-		w: w,
-	}
+	p := &Prompter{r: bufio.NewReader(r), w: w}
 	if f, ok := r.(*os.File); ok {
 		p.fd = int(f.Fd())
 		p.isTTY = term.IsTerminal(p.fd)
@@ -37,61 +31,27 @@ func New(r io.Reader, w io.Writer) *Prompter {
 	return p
 }
 
-// Passphrase prompts for a passphrase, showing asterisks on TTYs.
-func (p *Prompter) Passphrase(msg string) (string, error) {
+// Secret prompts for a value, masking each character with '*' as it's typed —
+// for entering secrets. On a non-TTY (piped) reader it falls back to a normal
+// line read. The value is returned exactly as entered (no trimming), since a
+// secret may legitimately contain surrounding whitespace.
+func (p *Prompter) Secret(msg string) (string, error) {
 	fmt.Fprint(p.w, msg)
-
-	if p.isTTY {
-		pass, err := readMasked(p.fd, p.w)
-		fmt.Fprintln(p.w)
-		if err != nil {
-			return "", fmt.Errorf("reading passphrase: %w", err)
-		}
-		return pass, nil
+	if !p.isTTY {
+		return p.readLine()
 	}
-
-	return p.readLine()
-}
-
-// PassphraseConfirm prompts twice and ensures both entries match.
-// An empty passphrase is allowed.
-func (p *Prompter) PassphraseConfirm(msg string, confirmMsg string) (string, error) {
-	pass1, err := p.Passphrase(msg)
+	s, err := readMasked(p.fd, p.w)
+	fmt.Fprintln(p.w) // the user's Enter isn't echoed in raw mode
 	if err != nil {
 		return "", err
 	}
-	pass2, err := p.Passphrase(confirmMsg)
-	if err != nil {
-		return "", err
-	}
-	if pass1 != pass2 {
-		return "", fmt.Errorf("passphrases do not match")
-	}
-	return pass1, nil
+	return s, nil
 }
 
-// Value prompts for a secret value with visible input. Leading/trailing spaces are trimmed.
-func (p *Prompter) Value(msg string) (string, error) {
-	v, err := p.Line(msg)
-	return strings.TrimSpace(v), err
-}
-
-// Line prompts for visible text input.
+// Line prompts for a line of visible text input.
 func (p *Prompter) Line(msg string) (string, error) {
 	fmt.Fprint(p.w, msg)
 	return p.readLine()
-}
-
-// Confirm prompts for y/N confirmation.
-// Returns true only on explicit "y" or "yes". Default is no.
-func (p *Prompter) Confirm(msg string) (bool, error) {
-	fmt.Fprint(p.w, msg)
-	line, err := p.readLine()
-	if err != nil {
-		return false, err
-	}
-	line = strings.TrimSpace(strings.ToLower(line))
-	return line == "y" || line == "yes", nil
 }
 
 func (p *Prompter) readLine() (string, error) {
@@ -102,8 +62,8 @@ func (p *Prompter) readLine() (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
-// readMasked reads from fd in raw mode, printing '*' for each character typed.
-// Backspace removes the last character. Returns the entered string.
+// readMasked reads from fd in raw mode, echoing '*' for each printable
+// character. Backspace deletes the last one. Returns on Enter or EOF.
 func readMasked(fd int, w io.Writer) (string, error) {
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -114,7 +74,6 @@ func readMasked(fd int, w io.Writer) (string, error) {
 	tty := os.NewFile(uintptr(fd), "/dev/tty")
 	var buf []byte
 	b := make([]byte, 1)
-
 	for {
 		if _, err := tty.Read(b); err != nil {
 			return "", err
@@ -132,7 +91,7 @@ func readMasked(fd int, w io.Writer) (string, error) {
 				fmt.Fprint(w, "\b \b")
 			}
 		default:
-			if b[0] >= 32 { // printable characters only
+			if b[0] >= 32 { // printable only
 				buf = append(buf, b[0])
 				fmt.Fprint(w, "*")
 			}

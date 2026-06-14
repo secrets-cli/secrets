@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/agent"
 	"github.com/vars-cli/vars/internal/format"
 )
 
@@ -37,21 +36,21 @@ Intended for debugging and migration only.`,
 
 		fmt.Fprintln(os.Stderr, "vars: dumping all variables from the store")
 
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-
-		sockPath := agentSocketPath()
-		keys, err := agent.List(sockPath)
+		keys, err := v.List()
 		if err != nil {
 			return InternalError(err.Error())
 		}
-
 		for _, key := range keys {
-			val, _ := agent.Get(sockPath, key)
-			fmt.Fprintln(os.Stdout, formatter(key, val))
+			val, err := v.Get(key)
+			if err != nil {
+				return InternalError(fmt.Sprintf("decrypting %q: %v", key, err))
+			}
+			fmt.Fprintln(os.Stdout, formatter(key, string(val)))
 		}
-
 		return nil
 	},
 }

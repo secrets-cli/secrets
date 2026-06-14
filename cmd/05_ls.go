@@ -2,60 +2,63 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/vars-cli/vars/internal/agent"
 )
 
-var lsAll bool
-
 func init() {
-	lsCmd.Flags().BoolVarP(&lsAll, "all", "a", false, "List all keys with full names")
 	rootCmd.AddCommand(lsCmd)
 }
 
 var lsCmd = &cobra.Command{
 	Use:   "ls [scope]",
-	Short: "List keys in the store",
-	Long: `List key names, one per line.
+	Short: "List keys in the store as a tree",
+	Long: `Print the store's keys as a tree (scopes are directories).
 
-Without arguments, lists unscoped keys (no "/" in name).
-With a scope name, lists keys under that scope (prefix stripped from output).
-With --all, lists every key with its full name.`,
+With a scope argument, show only that subtree.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-
-		keys, err := agent.List(agentSocketPath())
+		keys, err := v.List()
 		if err != nil {
 			return InternalError(err.Error())
 		}
-
-		switch {
-		case lsAll:
-			for _, key := range keys {
-				fmt.Fprintln(os.Stdout, key)
-			}
-		case len(args) == 1:
-			prefix := args[0] + "/"
-			for _, key := range keys {
-				if strings.HasPrefix(key, prefix) {
-					fmt.Fprintln(os.Stdout, strings.TrimPrefix(key, prefix))
+		if len(args) == 1 {
+			prefix := strings.TrimSuffix(args[0], "/") + "/"
+			var sub []string
+			for _, k := range keys {
+				if strings.HasPrefix(k, prefix) {
+					sub = append(sub, strings.TrimPrefix(k, prefix))
 				}
 			}
-		default:
-			for _, key := range keys {
-				if !strings.Contains(key, "/") {
-					fmt.Fprintln(os.Stdout, key)
-				}
-			}
+			keys = sub
 		}
-
+		printTree(os.Stdout, keys)
 		return nil
 	},
+}
+
+// printTree prints sorted, slash-delimited keys as an indented tree, with each
+// scope directory shown once.
+func printTree(w io.Writer, keys []string) {
+	var prevDirs []string
+	for _, key := range keys {
+		parts := strings.Split(key, "/")
+		dirs, leaf := parts[:len(parts)-1], parts[len(parts)-1]
+		common := 0
+		for common < len(dirs) && common < len(prevDirs) && dirs[common] == prevDirs[common] {
+			common++
+		}
+		for d := common; d < len(dirs); d++ {
+			fmt.Fprintf(w, "%s%s/\n", strings.Repeat("  ", d), dirs[d])
+		}
+		fmt.Fprintf(w, "%s%s\n", strings.Repeat("  ", len(dirs)), leaf)
+		prevDirs = dirs
+	}
 }

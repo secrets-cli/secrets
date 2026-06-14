@@ -33,9 +33,26 @@ func Open(dir string) (*vault.Vault, error) {
 func vaultWith(dir string, signer *sshderive.Signer) *vault.Vault {
 	var committer vault.Committer
 	if git.Available() && git.IsRepo(dir) {
-		committer = git.New(dir)
+		committer = gitCommitter{git.New(dir)}
 	}
 	return vault.New(dir, sshderive.NewBackend(signer), committer)
+}
+
+// gitCommitter adapts *git.Repo to vault.Committer. git is a soft dependency:
+// a commit failure must never fail the mutation (the secret is already written),
+// so it degrades to a warning and the store is simply left un-versioned.
+type gitCommitter struct{ repo *git.Repo }
+
+func (g gitCommitter) Commit(message string) error {
+	if err := g.repo.Commit(message); err != nil {
+		fmt.Fprintf(os.Stderr, "vars: warning: git commit failed (saved, but not versioned): %v\n", err)
+	}
+	return nil
+}
+
+// VersionContent satisfies vault.History, enabling `vars get KEY~N`.
+func (g gitCommitter) VersionContent(relpath string, n int) ([]byte, error) {
+	return g.repo.VersionContent(relpath, n)
 }
 
 // ResolveSigner finds the key an existing store needs, by its recorded fingerprint.
@@ -64,10 +81,12 @@ func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 		return s, nil
 	}
 	if ag, conn, err := sshderive.DialAgent(); err == nil {
-		defer conn.Close()
 		if s, err := sshderive.FromAgent(ag, fp); err == nil {
+			// Keep the connection open: the signer uses it for every encrypt/
+			// decrypt this command performs. The process reclaims it on exit.
 			return s, nil
 		}
+		conn.Close() // agent lacks the key — release before trying the key file
 	}
 	if path := defaultKeyPath(); path != "" {
 		if s, err := sshderive.FromFile(path, nil); err == nil && (fp == "" || s.Fingerprint() == fp) {
@@ -89,10 +108,11 @@ func UsableInitSigners() ([]*sshderive.Signer, error) {
 		return []*sshderive.Signer{s}, nil
 	}
 	if ag, conn, err := sshderive.DialAgent(); err == nil {
-		defer conn.Close()
 		if signers, err := sshderive.AgentSigners(ag); err == nil && len(signers) > 0 {
+			// Keep the connection open: returned signers use it until exit.
 			return signers, nil
 		}
+		conn.Close()
 	}
 	if path := defaultKeyPath(); path != "" {
 		if s, err := sshderive.FromFile(path, nil); err == nil {
@@ -111,13 +131,14 @@ func Create(dir string, signer *sshderive.Signer) error {
 	if err := os.WriteFile(filepath.Join(dir, "RECOVERY.md"), []byte(recoveryDoc), 0o644); err != nil {
 		return fmt.Errorf("writing RECOVERY.md: %w", err)
 	}
+	// git is a soft dependency: if it's missing or fails, the store is still
+	// created and fully usable, just without versioning/sync.
 	if git.Available() {
 		repo := git.New(dir)
 		if err := repo.Init(); err != nil {
-			return fmt.Errorf("initializing git: %w", err)
-		}
-		if err := repo.Commit("init vars store"); err != nil {
-			return fmt.Errorf("initial commit: %w", err)
+			fmt.Fprintf(os.Stderr, "vars: warning: git init failed (store created, not versioned): %v\n", err)
+		} else if err := repo.Commit("init vars store"); err != nil {
+			fmt.Fprintf(os.Stderr, "vars: warning: initial git commit failed: %v\n", err)
 		}
 	}
 	return nil

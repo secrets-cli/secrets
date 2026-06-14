@@ -120,8 +120,12 @@ func TestBackend_WrongKeyFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if _, err := other.Decrypt(ct); err == nil {
+	_, err = other.Decrypt(ct)
+	if err == nil {
 		t.Fatal("decrypt with a different SSH key should fail")
+	}
+	if !strings.Contains(err.Error(), "not encrypted to your SSH key") {
+		t.Fatalf("expected a clear key-mismatch message, got: %v", err)
 	}
 }
 
