@@ -211,3 +211,21 @@ func TestLog_ParsesLines(t *testing.T) {
 		t.Fatalf("log should scope to the file, calls = %v", f.calls)
 	}
 }
+
+// TestGitExec_ReturnsSubprocessOutput exercises the real runner (the fake
+// bypasses it). It guards a bug we shipped: `return buf.String(), cmd.Run()`
+// reads the buffer before Run() executes, since Go evaluates return operands
+// left to right, so every output-reading call (Log, HasRemote, …) saw "".
+// `git version` needs no repository, so it's hermetic.
+func TestGitExec_ReturnsSubprocessOutput(t *testing.T) {
+	if !Available() {
+		t.Skip("git not installed")
+	}
+	out, err := gitExec(t.TempDir(), "version")
+	if err != nil {
+		t.Fatalf("git version: %v", err)
+	}
+	if !strings.Contains(out, "git version") {
+		t.Fatalf("gitExec returned no subprocess output: %q", out)
+	}
+}

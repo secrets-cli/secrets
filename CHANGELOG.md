@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] — unreleased
+
+Complete re-architecture: from a single scrypt-encrypted blob + gRPC agent to a
+per-file, SSH-encrypted, git-tracked store. **Breaking: there is no in-place
+migration** — export from the old binary and import into the new one (see README).
+
+### Added
+- Per-file `age` store: one encrypted `.age` file per secret, scopes as directories, rooted at a git repo.
+- SSH-derived encryption (`ssh-v1` scheme): each file's key comes from a deterministic `SSHSIG` signature (namespace `vars.store.v1`) by your Ed25519/RSA key, via `ssh-agent` or the key file — no passphrase, no daemon.
+- `vars get KEY~N` — retrieve the value N versions ago from git history.
+- `vars history <key>` — the git commit log for one key.
+- `vars sync` — `pull --rebase` then push; `vars git <args>` — passthrough to git in the store dir.
+- In-tree break-glass `README.md` documenting manual decryption with `ssh-keygen`; a default-deny `.gitignore`.
+- `VARS_SSH_KEY` to pin a specific key; first-run key selection from `ssh-agent`.
+
+### Changed
+- Encryption is now per-file age wrapped by an SSH-derived key (was age/scrypt of one blob).
+- History and sync are git-native (`git log` = history, `git push`/`pull` = sync); git is a soft dependency.
+- The store lives at `~/.local/share/vars/store/` (override with `VARS_STORE_DIR`); descriptor is `store.json`.
+
+### Removed
+- The gRPC agent (`vars agent`), the scrypt single-blob store, the passphrase machinery (`vars passwd`, passphrase re-checks, `VARS_AGENT_TTL`/`SOCK`), and the protobuf/grpc dependencies.
+- The `--stdin` flow (CI uses env injection + `resolve`'s shell fallback).
+
 ## [0.5.0]
 
 ### Added

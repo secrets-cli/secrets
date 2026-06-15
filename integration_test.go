@@ -210,9 +210,9 @@ func TestResolvePartialAndStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve --partial: %v", err)
 	}
-	has(t, so, "https://rpc")  // from store
-	has(t, so, "from_dotenv")  // dotenv fallback for a manifest key
-	has(t, so, "PASSTHROUGH")  // non-manifest stdin key passes through
+	has(t, so, "https://rpc") // from store
+	has(t, so, "from_dotenv") // dotenv fallback for a manifest key
+	has(t, so, "PASSTHROUGH") // non-manifest stdin key passes through
 }
 
 func TestResolveShellEnvFallback(t *testing.T) {
@@ -248,8 +248,8 @@ profiles:
 	// default profile auto-applied + global + inline literal.
 	def := r.mustRun("resolve")
 	has(t, def, "0xDEV")
-	has(t, def, "abc")               // global alias
-	has(t, def, `LOG_LEVEL='info'`)  // inline literal
+	has(t, def, "abc")              // global alias
+	has(t, def, `LOG_LEVEL='info'`) // inline literal
 	// named profile overrides.
 	has(t, r.mustRun("resolve", "-p", "mainnet"), "0xPROD")
 }
@@ -433,4 +433,82 @@ func TestGetVersion(t *testing.T) {
 	if got, _, _ := r.run("get", "RPC_URL~2"); got != "v1" {
 		t.Fatalf("RPC_URL~2 = %q, want v1", got)
 	}
+}
+
+// --- value-handling hardening (2026-06-15 audit) ---
+
+func TestSetStdinMultiline(t *testing.T) {
+	r := newRunner(t)
+	pem := "-----BEGIN-----\nLINE2\n-----END-----" // no trailing newline
+	if _, _, err := r.runStdin(pem, "set", "TLS_KEY", "-"); err != nil {
+		t.Fatalf("set TLS_KEY -: %v", err)
+	}
+	if got := r.mustRun("get", "TLS_KEY"); got != pem {
+		t.Fatalf("multi-line round-trip:\n got:  %q\n want: %q", got, pem)
+	}
+}
+
+func TestSetNoValueNonTTYErrors(t *testing.T) {
+	r := newRunner(t)
+	// No value and a non-interactive stdin: must error (not silently read one line).
+	_, se := r.mustFail("set", "K")
+	has(t, se, "vars set K -")
+}
+
+func TestSetValueStartingWithDash(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "DASHED", "--", "-----BEGIN-----")
+	if got := r.mustRun("get", "DASHED"); got != "-----BEGIN-----" {
+		t.Fatalf("get = %q", got)
+	}
+}
+
+func TestResolveRejectsInjectableManifestName(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "SAFE", "ok")
+	r.writeFile(".vars.yaml", "keys:\n  - \"EVIL$(touch pwned)\"\n")
+	_, se := r.mustFail("resolve")
+	has(t, se, "invalid env var name")
+	if _, err := os.Stat(filepath.Join(r.workDir, "pwned")); err == nil {
+		t.Fatal("injection guard failed: resolve must never emit an unsafe name")
+	}
+}
+
+func TestResolveSkipsInjectableStdinName(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "SAFE", "ok")
+	r.writeFile(".vars.yaml", "keys:\n  - SAFE\n")
+	so, se, err := r.runStdin("BAD$(x)=v\nGOOD=p\n", "resolve", "--partial")
+	if err != nil {
+		t.Fatalf("resolve --partial: %v\n%s", err, se)
+	}
+	has(t, so, "export GOOD='p'") // valid pass-through still emitted
+	has(t, se, "skipping invalid env var name")
+	if strings.Contains(so, "BAD$(x)") {
+		t.Fatalf("unsafe stdin name must not be emitted:\n%s", so)
+	}
+}
+
+func TestResolveDotenvRejectsNewline(t *testing.T) {
+	r := newRunner(t)
+	r.runStdin("a\nb", "set", "PEM", "-")
+	r.writeFile(".vars.yaml", "keys:\n  - PEM\n")
+	_, se := r.mustFail("resolve", "--dotenv")
+	has(t, se, "not representable in --dotenv")
+	// posix is fine with newlines (literal in single quotes).
+	has(t, r.mustRun("resolve"), "export PEM='a\nb'")
+}
+
+func TestDumpResilientToDotenvNewline(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "NORMAL", "ok")
+	r.runStdin("a\nb", "set", "PEM", "-")
+	// --dotenv can't represent the multi-line value: skip+warn+nonzero, keep the rest.
+	so, se := r.mustFail("dump", "--dotenv")
+	has(t, so, "NORMAL=ok")
+	has(t, se, "skipping")
+	// posix dump handles both.
+	all := r.mustRun("dump")
+	has(t, all, "export NORMAL='ok'")
+	has(t, all, "export PEM='a\nb'")
 }

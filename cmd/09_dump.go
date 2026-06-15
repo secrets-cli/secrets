@@ -44,12 +44,25 @@ Intended for debugging and migration only.`,
 		if err != nil {
 			return InternalError(err.Error())
 		}
+		// Recovery/migration path: dump everything we can, warn on what we can't,
+		// and exit non-zero if any key failed — one bad file must not hide the rest.
+		failed := false
 		for _, key := range keys {
 			val, err := v.Get(key)
 			if err != nil {
-				return InternalError(fmt.Sprintf("decrypting %q: %v", key, err))
+				fmt.Fprintf(os.Stderr, "vars: warning: skipping %q: %v\n", key, err)
+				failed = true
+				continue
+			}
+			if dumpDotenv && format.HasNewline(string(val)) {
+				fmt.Fprintf(os.Stderr, "vars: warning: skipping %q: value has a newline, not representable in --dotenv\n", key)
+				failed = true
+				continue
 			}
 			fmt.Fprintln(os.Stdout, formatter(key, string(val)))
+		}
+		if failed {
+			return InternalError("some keys could not be dumped (see warnings above)")
 		}
 		return nil
 	},

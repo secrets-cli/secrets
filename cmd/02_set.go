@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -25,7 +26,12 @@ var setCmd = &cobra.Command{
 	Short: "Add or update a key in the store",
 	Long: `Write a key-value pair to the store. If value is omitted, prompts
 interactively with echo disabled (preferred — inline values appear in
-shell history).`,
+shell history).
+
+  vars set KEY value      add/update inline (note: appears in shell history)
+  vars set KEY            prompt for the value, masked
+  vars set KEY -          read the value from stdin, verbatim (use for multi-line, e.g. a PEM)
+  vars set KEY -- -value  for a value that starts with '-'`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if setReplace && setSkip {
@@ -35,14 +41,26 @@ shell history).`,
 		key := args[0]
 
 		var value string
-		if len(args) == 2 {
+		switch {
+		case len(args) == 2 && args[1] == "-":
+			// Read the whole of stdin verbatim — the way to store multi-line or
+			// piped values without the first-line truncation a prompt would impose.
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return UserError("reading value from stdin: " + err.Error())
+			}
+			value = string(data)
+		case len(args) == 2:
 			value = args[1]
-		} else {
+		case term.IsTerminal(int(os.Stdin.Fd())):
 			v, err := stdinPrompter().Secret("Value: ")
 			if err != nil {
 				return UserError(err.Error())
 			}
 			value = v
+		default:
+			// Non-interactive with no value: don't silently read a single line.
+			return UserError("no value given; pass it as an argument, or pipe it with `vars set " + key + " -`")
 		}
 
 		v, err := openVault()

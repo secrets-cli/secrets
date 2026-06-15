@@ -6,7 +6,7 @@
 between your laptop and your server, and sit in plaintext where any script (or
 coding agent) can read them.
 
-`vars` replaces them with a single personal, encrypted store, and loads the
+`vars` replaces them with a personal, encrypted store, and loads the
 right secrets into any project on demand:
 
 ```sh
@@ -17,8 +17,8 @@ deno run index.ts                      # your app just sees normal env vars
 
 - **No `.env` files in your repos**: nothing to leak, nothing to gitignore.
 - **No passphrase to remember**: your SSH key unlocks it.
-- **Synced and versioned**: the store is just a git repo.
-- **Built for teams**: commit `.vars.yaml` with the vars a project needs, never the secrets.
+- **Synced and versioned**: your vars store is a git repo.
+- **Built for teams**: commit a yaml file with the env vars a project needs.
 
 ---
 
@@ -46,16 +46,19 @@ vars set PRIVATE_KEY          # prompts for the value (masked), kept out of shel
 **3. Use it in a project**
 
 ```sh
-vars init                     # scaffolds .vars.yaml: list your keys here, then commit it
+vars init                     # scaffolds .vars.yaml in your project: list your keys here
 eval "$(vars resolve)"        # bash/zsh: load the keys as env vars
 vars resolve --fish | source  # fish
 ```
 
-That's the whole loop. The rest is optional depth.
+That's the main flow. The rest is optional depth.
 
-> **One requirement:** an Ed25519 or RSA SSH key (`~/.ssh/id_ed25519` works out
-> of the box: create one with `ssh-keygen -t ed25519`). git is optional, used
-> for history and cross-machine sync.
+> **One requirement: an SSH key** — the same kind you already use for GitHub or
+> to log into a server. vars derives each file's encryption from it, so there's
+> no new passphrase to invent. Most people already have one at
+> `~/.ssh/id_ed25519`; if not, create it with `ssh-keygen -t ed25519`. The key
+> must be **Ed25519 or RSA** (ECDSA and FIDO/`sk-` keys sign non-deterministically,
+> so vars can't use them). git is optional, used for history and cross-machine sync.
 
 ---
 
@@ -159,8 +162,8 @@ main/dev/RPC_URL  →  main/RPC_URL  →  RPC_URL  →  not found
 
 ### Local overrides
 
-`.vars.local.yaml` (git-ignored) overrides `.vars.yaml` per-key per-profile —
-your personal deviations from the team's committed convention.
+`.vars.local.yaml` (git-ignored) overrides `.vars.yaml` per-key per-profile:
+your local deviations from the team's convention.
 
 ### Working with existing env vars / fallbacks
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -78,6 +79,11 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 			for {
 				existing, getErr := v.Get(key)
 				if getErr != nil {
+					if !errors.Is(getErr, vault.ErrNotFound) {
+						// Invalid key (e.g. a bad scope) or a decrypt failure — abort
+						// before writing anything, don't misclassify it as a new key.
+						return UserError(getErr.Error())
+					}
 					pending = append(pending, vault.Item{Key: key, Value: []byte(value)})
 					imported++
 					continue entryLoop

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,6 +78,15 @@ Mapping values may use special prefixes:
 			fmt.Fprintf(os.Stderr, "vars: warning: profile %q not found in manifest\n", resolveProfile)
 		}
 
+		// resolve's output is meant to be eval'd, so an env var name that isn't a
+		// valid shell identifier is a command-injection vector. The manifest is the
+		// user's own file, so reject loudly.
+		for _, v := range vars {
+			if !format.ValidName(v.EnvName) {
+				return UserError(fmt.Sprintf("invalid env var name %q in manifest (must match [A-Za-z_][A-Za-z0-9_]*)", v.EnvName))
+			}
+		}
+
 		// A piped stdin means a dotenv fallback. We can't prompt when piped, so a
 		// missing store is a hard error rather than the interactive create wizard.
 		stdinPiped := func() bool {
@@ -127,6 +137,11 @@ Mapping values may use special prefixes:
 				continue
 			}
 			val, lookupErr := resolveStoreKey(vlt, v.StoreKey)
+			// A real failure (decrypt / IO) must surface, not be masked as "missing"
+			// and silently swallowed into a default or fallback.
+			if lookupErr != nil && !errors.Is(lookupErr, vault.ErrNotFound) {
+				return UserError(lookupErr.Error())
+			}
 			if v.HasDefault && (lookupErr != nil || val == "") {
 				entries = append(entries, entry{v.EnvName, v.DefaultValue, "manifest"})
 				continue
@@ -159,9 +174,15 @@ Mapping values may use special prefixes:
 			entries = append(entries, entry{v.EnvName, val, "vars"})
 		}
 
-		// Pass through stdin dotenv keys not declared in the manifest
+		// Pass through stdin dotenv keys not declared in the manifest. These come
+		// from an untrusted .env, so skip names that aren't valid shell identifiers
+		// rather than emit an injectable `export` line.
 		for _, e := range stdinEntries {
 			if !manifestKeys[e.Key] {
+				if !format.ValidName(e.Key) {
+					fmt.Fprintf(os.Stderr, "vars: warning: skipping invalid env var name %q from stdin\n", e.Key)
+					continue
+				}
 				entries = append(entries, entry{e.Key, e.Value, ""})
 			}
 		}
@@ -176,6 +197,9 @@ Mapping values may use special prefixes:
 					fmt.Fprintf(os.Stdout, "# %s  shell\n", e.envName)
 				}
 			default:
+				if resolveDotenv && format.HasNewline(e.value) {
+					return UserError(fmt.Sprintf("value for %q contains a newline; not representable in --dotenv format", e.envName))
+				}
 				if resolveOrigin && e.source != "" {
 					fmt.Fprintf(os.Stdout, "%s  # %s\n", formatter(e.envName, e.value), e.source)
 				} else {
@@ -285,6 +309,9 @@ func resolveStoreKey(v *vault.Vault, key string) (string, error) {
 		val, err := v.Get(key)
 		if err == nil {
 			return string(val), nil
+		}
+		if !errors.Is(err, vault.ErrNotFound) {
+			return "", err // decrypt/IO failure — surface it, don't keep stripping
 		}
 		// Drop the scope segment immediately before the leaf key name.
 		last := strings.LastIndexByte(key, '/')
