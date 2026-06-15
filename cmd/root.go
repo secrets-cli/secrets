@@ -55,7 +55,9 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		// Determine exit code: ExitError for user errors (1), default 2
 		if exitErr, ok := err.(*ExitError); ok {
-			fmt.Fprintln(os.Stderr, exitErr.Error())
+			if exitErr.Message != "" { // empty message = caller already printed (e.g. git passthrough)
+				fmt.Fprintln(os.Stderr, exitErr.Error())
+			}
 			os.Exit(exitErr.Code)
 		}
 		fmt.Fprintln(os.Stderr, err.Error())

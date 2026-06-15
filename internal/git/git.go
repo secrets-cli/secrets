@@ -155,11 +155,20 @@ func (r *Repo) VersionContent(relpath string, n int) ([]byte, error) {
 }
 
 // Passthrough runs `git <args>` in the store dir with the process's own stdio,
-// backing `vars git …`. It returns the command error (callers may inspect exit code).
-func (r *Repo) Passthrough(args []string) error {
+// backing `vars git …`. It returns git's exit code (0 on success) so the wrapper
+// stays transparent, and an error only when git could not be launched.
+func (r *Repo) Passthrough(args []string) (int, error) {
 	cmd := exec.Command("git", append([]string{"-C", r.dir}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
+	err := cmd.Run()
+	if err == nil {
+		return 0, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), nil // git ran and exited non-zero; it already wrote to stderr
+	}
+	return 1, err // git could not be launched
 }
 
 func (r *Repo) nothingStaged() bool {

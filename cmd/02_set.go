@@ -90,7 +90,7 @@ shell history).
 				return UserError("key already exists; use --replace or --skip")
 			}
 
-			fmt.Fprintf(os.Stderr, "\n%s already exists. New value will replace it.\n", key)
+			fmt.Fprintf(os.Stderr, "\n%s already exists (current: %s). New value will replace it.\n", key, preview(string(existing)))
 			choice, err := stdinPrompter().Line("[r]eplace  [n]ew name  [s]kip > ")
 			if err != nil {
 				return UserError(err.Error())

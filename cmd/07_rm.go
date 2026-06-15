@@ -27,6 +27,8 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
+		args = uniqueStrings(args) // `rm K K` should remove K once, not error on the second
+
 		// Verify all keys exist before prompting or deleting.
 		for _, key := range args {
 			if !v.Has(key) {

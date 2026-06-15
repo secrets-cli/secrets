@@ -106,7 +106,7 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 					return UserError("conflicting keys found; use --replace or --skip to resolve non-interactively")
 				}
 
-				fmt.Fprintf(os.Stderr, "\n%s already exists.\n  current:  %s\n  imported: %s\n", key, existing, value)
+				fmt.Fprintf(os.Stderr, "\n%s already exists.\n  current:  %s\n  imported: %s\n", key, preview(string(existing)), preview(value))
 				choice, err := stdinPrompter().Line("[r]eplace  [n]ew name  [s]kip > ")
 				if err != nil {
 					return UserError(err.Error())

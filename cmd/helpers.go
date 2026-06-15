@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/vars-cli/vars/internal/manifest"
 	"github.com/vars-cli/vars/internal/prompt"
 )
 
@@ -20,31 +21,48 @@ func stdinPrompter() *prompt.Prompter {
 	return stdinPrompt
 }
 
-// printManifestHint prints a hint if .vars.yaml exists in cwd
-// and the key is not listed in it. Strips scope prefix before checking
-// so that "prod/RPC_URL" correctly matches "- RPC_URL" in the manifest.
+// printManifestHint warns when key is not declared in .vars.yaml. It uses the
+// manifest parser (not ad-hoc string matching), so quoting or spacing can't
+// produce a false hint. The scope prefix is stripped first, so "prod/RPC_URL"
+// matches a "RPC_URL" entry.
 func printManifestHint(key string) {
-	data, err := os.ReadFile(".vars.yaml")
+	m, err := manifest.Load(".vars.yaml")
 	if err != nil {
-		return
+		return // no manifest in cwd (or unreadable): nothing to hint about
 	}
 	bareKey := key
 	if i := strings.IndexByte(key, '/'); i >= 0 {
 		bareKey = key[i+1:]
 	}
-	if !containsKey(string(data), bareKey) {
-		fmt.Fprintf(os.Stderr, "Hint: %q is not listed in .vars.yaml. Consider adding it.\n", key)
+	for _, k := range m.Keys {
+		if k == bareKey {
+			return
+		}
 	}
+	fmt.Fprintf(os.Stderr, "Hint: %q is not listed in .vars.yaml. Consider adding it.\n", key)
 }
 
-// containsKey checks if a key appears as a YAML list item (- KEY).
-func containsKey(yamlContent string, key string) bool {
-	needle := "- " + key
-	idx := strings.Index(yamlContent, needle)
-	if idx < 0 {
-		return false
+// preview renders a short, scrollback-safe glimpse of a secret for conflict
+// prompts: enough to tell two values apart without echoing them. Values of 6
+// characters or fewer are shown only as a length, never revealed.
+func preview(s string) string {
+	const n = 6
+	r := []rune(s)
+	if len(r) <= n {
+		return fmt.Sprintf("(%d chars)", len(r))
 	}
-	// Ensure it's at end-of-string or followed by a newline (not a prefix of another key).
-	end := idx + len(needle)
-	return end == len(yamlContent) || yamlContent[end] == '\n' || yamlContent[end] == '\r'
+	return fmt.Sprintf("%s… (%d chars)", string(r[:n]), len(r))
+}
+
+// uniqueStrings returns items with duplicates removed, preserving first-seen order.
+func uniqueStrings(items []string) []string {
+	seen := make(map[string]bool, len(items))
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if !seen[it] {
+			seen[it] = true
+			out = append(out, it)
+		}
+	}
+	return out
 }

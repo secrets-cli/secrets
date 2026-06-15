@@ -14,6 +14,14 @@ func parse(t *testing.T, input string) []Entry {
 	return entries
 }
 
+func TestParse_LongValue(t *testing.T) {
+	big := strings.Repeat("x", 200*1024) // exceeds bufio.Scanner's 64 KB default token cap
+	got := parse(t, "BIG="+big+"\n")
+	if len(got) != 1 || got[0].Value != big {
+		t.Fatalf("long single-line value not parsed whole (entries=%d, value len=%d)", len(got), len(got[0].Value))
+	}
+}
+
 func TestBasic(t *testing.T) {
 	entries := parse(t, "KEY=value\n")
 	if len(entries) != 1 || entries[0].Key != "KEY" || entries[0].Value != "value" {

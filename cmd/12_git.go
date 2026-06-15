@@ -28,9 +28,13 @@ var gitCmd = &cobra.Command{
 		if !git.Available() {
 			return UserError("git is not installed")
 		}
-		if err := git.New(dir).Passthrough(args); err != nil {
-			// git already wrote to stderr; surface a non-zero exit.
-			return &ExitError{Code: 1, Message: "git: " + err.Error()}
+		code, err := git.New(dir).Passthrough(args)
+		if err != nil {
+			return InternalError("running git: " + err.Error())
+		}
+		if code != 0 {
+			// git already printed its own error; just mirror its exit code.
+			return &ExitError{Code: code}
 		}
 		return nil
 	},

@@ -271,6 +271,9 @@ func (v *Vault) Rename(from, to string) error {
 	if err != nil {
 		return err
 	}
+	if from == to {
+		return fmt.Errorf("source and destination are the same: %q", from)
+	}
 	if _, err := os.Stat(src); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("key %q %w", from, ErrNotFound)

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -511,4 +512,61 @@ func TestDumpResilientToDotenvNewline(t *testing.T) {
 	all := r.mustRun("dump")
 	has(t, all, "export NORMAL='ok'")
 	has(t, all, "export PEM='a\nb'")
+}
+
+// --- low-severity polish (2026-06-15 audit) ---
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+func TestGitPassthroughExitCode(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "K", "v") // create the store (and its git repo)
+	args := []string{"rev-parse", "--verify", "definitely-not-a-ref"}
+	_, _, verr := r.run(append([]string{"git"}, args...)...)
+	direct := exec.Command("git", append([]string{"-C", r.storeDir}, args...)...)
+	direct.Run()
+	want := direct.ProcessState.ExitCode()
+	if want == 0 {
+		t.Fatal("setup: a bad ref should make git exit non-zero")
+	}
+	if got := exitCode(verr); got != want {
+		t.Fatalf("vars git exit = %d, want git's %d (must mirror git, not flatten to 1)", got, want)
+	}
+}
+
+func TestRmDuplicateArgs(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "K", "v")
+	r.mustRun("rm", "--force", "K", "K") // dedup: must not error on the repeat
+	if _, _, err := r.run("get", "K"); err == nil {
+		t.Fatal("K should be deleted")
+	}
+}
+
+func TestMvSameKey(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "K", "v")
+	_, se := r.mustFail("mv", "--force", "K", "K")
+	has(t, se, "source and destination are the same")
+}
+
+func TestSetManifestHintUsesParser(t *testing.T) {
+	r := newRunner(t)
+	// Quoted entry: the old "- KEY" substring matcher missed this and falsely warned.
+	r.writeFile(".vars.yaml", "keys:\n  - \"LISTED\"\n")
+	if _, se, _ := r.run("set", "LISTED", "v"); strings.Contains(se, "not listed") {
+		t.Fatalf("a quoted manifest key should count as listed:\n%s", se)
+	}
+	if _, se, _ := r.run("set", "UNLISTED", "v"); !strings.Contains(se, "not listed in .vars.yaml") {
+		t.Fatalf("an unlisted key should warn:\n%s", se)
+	}
 }
