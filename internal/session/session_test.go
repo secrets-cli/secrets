@@ -146,9 +146,17 @@ func TestCreate_WritesMetaAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	for _, want := range []string{"!*/", "!*.age", "!/store.json", "!/README.md", "!/.gitignore"} {
+	for _, want := range []string{"!*/", "!*.age", "!/store.json", "!/README.md", "!/.gitignore", "!/.gitattributes"} {
 		if !strings.Contains(string(gi), want) {
 			t.Fatalf(".gitignore missing %q", want)
 		}
+	}
+
+	ga, err := os.ReadFile(filepath.Join(dir, ".gitattributes"))
+	if err != nil {
+		t.Fatalf("read .gitattributes: %v", err)
+	}
+	if !strings.Contains(string(ga), "*.age binary") {
+		t.Fatalf(".gitattributes missing `*.age binary`, got %q", ga)
 	}
 }

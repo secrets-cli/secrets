@@ -25,7 +25,7 @@ var setCmd = &cobra.Command{
 	Use:   "set <key> [value]",
 	Short: "Add or update a key in the store",
 	Long: `Write a key-value pair to the store. If value is omitted, prompts
-interactively with echo disabled (preferred — inline values appear in
+interactively with echo disabled (preferred, since inline values appear in
 shell history).
 
   vars set KEY value      add/update inline (note: appears in shell history)

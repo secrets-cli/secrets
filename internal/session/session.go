@@ -20,7 +20,7 @@ const Scheme = "ssh-v1"
 // key it requires and attaching git versioning when dir is a repo.
 func Open(dir string) (*vault.Vault, error) {
 	if !vault.Exists(dir) {
-		return nil, fmt.Errorf("no vars store at %s — run `vars` to create one", dir)
+		return nil, fmt.Errorf("no vars store at %s: run `vars` to create one", dir)
 	}
 	signer, err := ResolveSigner(dir)
 	if err != nil {
@@ -45,7 +45,8 @@ type gitCommitter struct{ repo *git.Repo }
 
 func (g gitCommitter) Commit(message string) error {
 	if err := g.repo.Commit(message); err != nil {
-		fmt.Fprintf(os.Stderr, "vars: warning: git commit failed (saved, but not versioned): %v\n", err)
+		fmt.Fprintf(os.Stderr, "vars: warning: saved, but git did not version it (%v).\n"+
+			"  Run `vars sync` to commit and push it; until then it folds into the next commit.\n", err)
 	}
 	return nil
 }
@@ -134,6 +135,9 @@ func Create(dir string, signer *sshderive.Signer) error {
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(storeGitignore), 0o644); err != nil {
 		return fmt.Errorf("writing .gitignore: %w", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte(storeGitattributes), 0o644); err != nil {
+		return fmt.Errorf("writing .gitattributes: %w", err)
+	}
 	// git is a soft dependency: if it's missing or fails, the store is still
 	// created and fully usable, just without versioning/sync.
 	if git.Available() {
@@ -172,7 +176,14 @@ const storeGitignore = `# vars store: commit only encrypted secrets, the descrip
 !/store.json
 !/README.md
 !/.gitignore
+!/.gitattributes
 `
+
+// storeGitattributes marks encrypted files as binary so git never text-merges
+// them (which would inject conflict markers into ciphertext) and never applies
+// line-ending conversion (which would corrupt the bytes under core.autocrlf). A
+// conflict on a key then resolves cleanly as a whole-file "pick a side".
+const storeGitattributes = "*.age binary\n"
 
 // storeReadme is written as README.md at the store root, so the directory
 // explains itself and documents how to recover secrets without the vars binary.
@@ -181,11 +192,11 @@ const storeReadme = "# vars store\n\n" +
 	"[age](https://age-encryption.org)-encrypted file per secret, each file's key derived\n" +
 	"from an SSH key (scheme `ssh-v1`; the key's fingerprint is in `store.json`).\n\n" +
 	"## Reading these secrets\n\n" +
-	"Use vars — it's open-source and a single static Go binary, so rebuild it if needed:\n\n" +
+	"Use vars, it's open-source and a single static Go binary, so rebuild it if needed:\n\n" +
 	"    go install github.com/vars-cli/vars@latest   # if you don't have the binary\n" +
 	"    vars dump                                      # print every key and value\n" +
 	"    vars get <KEY>                                 # one value\n\n" +
-	"## If vars is unavailable — the format\n\n" +
+	"## If vars is unavailable: the format\n\n" +
 	"You need the SSH private key whose fingerprint is in `store.json`. Decryption uses\n" +
 	"standard primitives, so it can be reimplemented in any language with a crypto library\n" +
 	"(it is NOT a sequence of shell commands). For each `<key>.age`:\n\n" +

@@ -133,6 +133,33 @@ func TestSync_NoRemoteErrors(t *testing.T) {
 	}
 }
 
+func TestSync_AbortsRebaseOnPullFailure(t *testing.T) {
+	// A diverged/conflicting remote makes pull --rebase fail; Sync must abort the
+	// rebase (so the repo isn't left wedged) and not push.
+	f := &fakeGit{remotes: "origin\n", upstream: true, failOn: "pull"}
+	if err := repoWith(f).Sync(); err == nil {
+		t.Fatal("sync should fail when the rebase can't apply")
+	}
+	if !f.issued("rebase --abort") {
+		t.Fatalf("a failed pull --rebase must be aborted, calls = %v", f.calls)
+	}
+	if f.issued("push") {
+		t.Fatalf("must not push after a failed rebase, calls = %v", f.calls)
+	}
+}
+
+func TestSync_CommitsPendingBeforePulling(t *testing.T) {
+	// A dirty tree (e.g. a prior best-effort auto-commit failed) is committed
+	// before the rebase, so sync self-heals rather than failing on a dirty tree.
+	f := &fakeGit{remotes: "origin\n", upstream: true, staged: true}
+	if err := repoWith(f).Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !f.issued("commit -q -m vars: commit pending changes before sync") {
+		t.Fatalf("expected pending changes committed before pull, calls = %v", f.calls)
+	}
+}
+
 func TestInit_SetsIdentityWhenMissing(t *testing.T) {
 	f := &fakeGit{configEmail: ""}
 	if err := repoWith(f).Init(); err != nil {

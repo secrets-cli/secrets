@@ -53,7 +53,7 @@ vars resolve --fish | source  # fish
 
 That's the main flow. The rest is optional depth.
 
-> **One requirement: an SSH key** — the same kind you already use for GitHub or
+> **One requirement: an SSH key**, the same kind you already use for GitHub or
 > to log into a server. vars derives each file's encryption from it, so there's
 > no new passphrase to invent. Most people already have one at
 > `~/.ssh/id_ed25519`; if not, create it with `ssh-keygen -t ed25519`. The key

@@ -23,7 +23,7 @@ var gitCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := storeDir()
 		if !vault.Exists(dir) {
-			return UserError("no store yet — run `vars` to create one")
+			return UserError("no store yet: run `vars` to create one")
 		}
 		if !git.Available() {
 			return UserError("git is not installed")
@@ -43,7 +43,7 @@ var syncCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := storeDir()
 		if !vault.Exists(dir) {
-			return UserError("no store yet — run `vars` to create one")
+			return UserError("no store yet: run `vars` to create one")
 		}
 		if !git.Available() || !git.IsRepo(dir) {
 			return UserError("the store is not a git repo; nothing to sync")

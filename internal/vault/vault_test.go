@@ -78,6 +78,23 @@ func TestVault_GetMissingIsErrNotFound(t *testing.T) {
 	}
 }
 
+// SetMany must validate/encrypt everything before writing, so one bad key aborts
+// the whole batch with nothing written — not even valid keys that precede it.
+func TestVault_SetManyAtomicOnBadKey(t *testing.T) {
+	v := newVault(t, nil)
+	items := []Item{
+		{Key: "GOOD1", Value: []byte("a")},
+		{Key: "../escape", Value: []byte("b")}, // invalid path → abort the batch
+		{Key: "GOOD2", Value: []byte("c")},
+	}
+	if err := v.SetMany(items, "import"); err == nil {
+		t.Fatal("SetMany with an invalid key should fail")
+	}
+	if v.Has("GOOD1") || v.Has("GOOD2") {
+		t.Fatal("SetMany must write no key when one is invalid (atomic up front)")
+	}
+}
+
 func TestVault_ScopedKeysAreDirectories(t *testing.T) {
 	v := newVault(t, nil)
 	if err := v.Set("prod/PRIVATE_KEY", []byte("0xPROD")); err != nil {

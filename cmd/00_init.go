@@ -23,7 +23,7 @@ func warnIfLocalNotGitignored() {
 		return // no .gitignore, nothing to check
 	}
 	if !strings.Contains(string(data), ".vars.local.yaml") {
-		fmt.Fprintln(os.Stderr, "warning: .vars.local.yaml exists but is not in .gitignore — add it to avoid committing personal overrides.")
+		fmt.Fprintln(os.Stderr, "warning: .vars.local.yaml exists but is not in .gitignore: add it to avoid committing personal overrides.")
 	}
 }
 
@@ -40,7 +40,7 @@ Commit .vars.yaml to version control. Never commit .vars.local.yaml.`,
 			return UserError(path + " already exists")
 		}
 
-		const scaffold = `# .vars.yaml — declare what env vars this project needs.
+		const scaffold = `# .vars.yaml: declare what env vars this project needs.
 # Commit this file. Never commit .vars.local.yaml.
 
 keys:

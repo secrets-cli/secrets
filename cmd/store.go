@@ -31,7 +31,7 @@ func openVault() (*vault.Vault, error) {
 
 // firstRun creates the store, selecting which SSH key to bind it to.
 func firstRun(dir string) error {
-	fmt.Fprintf(os.Stderr, "No store found — creating one at:\n  %s\n\n", dir)
+	fmt.Fprintf(os.Stderr, "No store found, creating one at:\n  %s\n\n", dir)
 
 	signers, err := session.UsableInitSigners()
 	if err != nil {
@@ -56,7 +56,7 @@ func firstRun(dir string) error {
 
 // chooseKey prompts the user to pick among multiple usable SSH keys.
 func chooseKey(signers []*sshderive.Signer) (*sshderive.Signer, error) {
-	fmt.Fprintln(os.Stderr, "Multiple SSH keys available — choose one to encrypt this store:")
+	fmt.Fprintln(os.Stderr, "Multiple SSH keys available, choose one to encrypt this store:")
 	for i, s := range signers {
 		fmt.Fprintf(os.Stderr, "  %d) %s\n", i+1, s.Fingerprint())
 	}

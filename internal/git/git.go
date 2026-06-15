@@ -84,9 +84,24 @@ func (r *Repo) Sync() error {
 	if !r.HasRemote() {
 		return errors.New("no git remote configured; add one with `vars git remote add origin <url>`")
 	}
+	// A prior best-effort auto-commit may have failed, leaving changes uncommitted;
+	// a rebase can't run on a dirty tree, and unpushed local edits should sync. So
+	// commit anything pending first (a no-op when the tree is already clean).
+	if err := r.Commit("vars: commit pending changes before sync"); err != nil {
+		return err
+	}
 	if r.hasUpstream() {
 		if out, err := r.run("pull", "--rebase"); err != nil {
-			return fmt.Errorf("git pull --rebase: %w: %s", err, out)
+			// A conflict (often the same key changed on two machines — encrypted
+			// blobs can't be auto-merged) leaves the repo mid-rebase. Abort to
+			// restore a clean, usable tree; local commits stay intact and unpushed.
+			r.run("rebase", "--abort") // best-effort; harmless no-op if no rebase started
+			return fmt.Errorf("sync could not rebase onto the remote, so it was aborted: your local store "+
+				"is unchanged and not pushed. The store and the remote have diverged (often the same key "+
+				"edited on two machines; encrypted files can't be auto-merged). Pick which side wins:\n"+
+				"  keep yours:   vars git push --force-with-lease   (the remote version is overwritten)\n"+
+				"  keep theirs:  vars git fetch && vars git reset --hard @{u}   (your local changes are discarded)\n"+
+				"git said: %s", strings.TrimSpace(out))
 		}
 		if out, err := r.run("push"); err != nil {
 			return fmt.Errorf("git push: %w: %s", err, out)

@@ -177,10 +177,33 @@ func (v *Vault) Set(key string, value []byte) error {
 	return v.commit("set " + key)
 }
 
-// SetMany writes several keys and commits once with the given message.
+// SetMany writes several keys and commits once with the given message. It
+// validates and encrypts every item up front, so a bad key or encryption
+// failure aborts before anything is written (no half-applied import). The only
+// residual non-atomicity is a disk error partway through the final write loop,
+// which no single-rename scheme can avoid.
 func (v *Vault) SetMany(items []Item, message string) error {
+	type blob struct {
+		path string
+		data []byte
+	}
+	blobs := make([]blob, 0, len(items))
 	for _, it := range items {
-		if err := v.writeKey(it.Key, it.Value); err != nil {
+		path, err := v.pathFor(it.Key)
+		if err != nil {
+			return err
+		}
+		ciphertext, err := v.backend.Encrypt(it.Value)
+		if err != nil {
+			return err
+		}
+		blobs = append(blobs, blob{path, ciphertext})
+	}
+	for _, b := range blobs {
+		if err := os.MkdirAll(filepath.Dir(b.path), dirPerm); err != nil {
+			return fmt.Errorf("creating scope directory: %w", err)
+		}
+		if err := atomicWrite(b.path, b.data, filePerm); err != nil {
 			return err
 		}
 	}
