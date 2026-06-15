@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,6 +59,22 @@ func TestVault_SetGet(t *testing.T) {
 	}
 	if string(got) != "https://rpc.example.com" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A missing key must be distinguishable (errors.Is ErrNotFound) from a real
+// decrypt/IO failure, so resolve's scope fallback and import don't mask the latter.
+func TestVault_GetMissingIsErrNotFound(t *testing.T) {
+	v := newVault(t, nil)
+	_, err := v.Get("NOPE")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(missing) err = %v, want wrapping ErrNotFound", err)
+	}
+	if err := v.Delete("NOPE"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete(missing) err = %v, want wrapping ErrNotFound", err)
+	}
+	if err := v.Rename("NOPE", "X"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Rename(missing) err = %v, want wrapping ErrNotFound", err)
 	}
 }
 

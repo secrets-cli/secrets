@@ -276,10 +276,10 @@ func extractSSHSIGSignature(t *testing.T, armored []byte) []byte {
 		p = p[n:]
 		return v
 	}
-	readStr() // publickey
-	readStr() // namespace
-	readStr() // reserved
-	readStr() // hash_algorithm
+	readStr()        // publickey
+	readStr()        // namespace
+	readStr()        // reserved
+	readStr()        // hash_algorithm
 	return readStr() // signature
 }
 

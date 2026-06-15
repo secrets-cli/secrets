@@ -8,6 +8,7 @@ package vault
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -21,11 +22,16 @@ import (
 const (
 	// DescriptorFile is the unencrypted store descriptor, committed with the store.
 	DescriptorFile = "store.json"
-	ageExt       = ".age"
+	ageExt         = ".age"
 
 	dirPerm  = 0o700
 	filePerm = 0o600
 )
+
+// ErrNotFound is wrapped by Get/GetVersion/Delete/Rename when a key's file is
+// absent, so callers can distinguish "missing" (e.g. scope fallback) from a real
+// decryption/IO failure (which must not be masked as not-found).
+var ErrNotFound = errors.New("not found in store")
 
 // Meta describes how to open a store. It is unencrypted and committed.
 type Meta struct {
@@ -122,7 +128,7 @@ func (v *Vault) Get(key string) ([]byte, error) {
 	ciphertext, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("key %q not found in store", key)
+			return nil, fmt.Errorf("key %q %w", key, ErrNotFound)
 		}
 		return nil, err
 	}
@@ -223,7 +229,7 @@ func (v *Vault) removeKey(key string) error {
 	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("key %q not found in store", key)
+			return fmt.Errorf("key %q %w", key, ErrNotFound)
 		}
 		return err
 	}
@@ -244,7 +250,7 @@ func (v *Vault) Rename(from, to string) error {
 	}
 	if _, err := os.Stat(src); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("key %q not found in store", from)
+			return fmt.Errorf("key %q %w", from, ErrNotFound)
 		}
 		return err
 	}

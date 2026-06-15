@@ -105,9 +105,8 @@ func supportedKeyType(pub ssh.PublicKey) error {
 		return nil
 	case ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521:
 		return fmt.Errorf("ECDSA keys sign non-deterministically and can't be used by vars; use an Ed25519 key (ssh-keygen -t ed25519)")
-	case ssh.KeyAlgoDSA:
-		return fmt.Errorf("DSA keys sign non-deterministically and can't be used by vars; use an Ed25519 key (ssh-keygen -t ed25519)")
 	default:
+		// Includes DSA (ssh-dss) and FIDO/sk- keys: non-deterministic or unsupported.
 		return fmt.Errorf("SSH key type %q is not supported; vars needs a deterministic Ed25519 or RSA key (FIDO/sk- keys won't work)", pub.Type())
 	}
 }

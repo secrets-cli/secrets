@@ -52,8 +52,8 @@ func TestResolveSigner_ViaEnvKey(t *testing.T) {
 }
 
 func TestResolveSigner_FingerprintMismatch(t *testing.T) {
-	_, fpA := writeKey(t)      // the store's key
-	keyB, _ := writeKey(t)     // a different key
+	_, fpA := writeKey(t)  // the store's key
+	keyB, _ := writeKey(t) // a different key
 	dir := t.TempDir()
 	vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: fpA})
 	t.Setenv("VARS_SSH_KEY", keyB)
