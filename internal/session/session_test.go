@@ -132,13 +132,23 @@ func TestCreate_WritesMetaAndRecovery(t *testing.T) {
 	if meta.Scheme != Scheme || meta.KeyFingerprint != fp {
 		t.Fatalf("meta = %+v", meta)
 	}
-	rec, err := os.ReadFile(filepath.Join(dir, "RECOVERY.md"))
+	rec, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil {
-		t.Fatalf("read RECOVERY.md: %v", err)
+		t.Fatalf("read README.md: %v", err)
 	}
 	for _, want := range []string{"ssh-keygen -Y sign", "vars.store.v1", "HKDF-SHA256", "vars dump"} {
 		if !strings.Contains(string(rec), want) {
-			t.Fatalf("RECOVERY.md missing %q", want)
+			t.Fatalf("README.md missing %q", want)
+		}
+	}
+
+	gi, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	for _, want := range []string{"!*/", "!*.age", "!/store.json", "!/README.md", "!/.gitignore"} {
+		if !strings.Contains(string(gi), want) {
+			t.Fatalf(".gitignore missing %q", want)
 		}
 	}
 }

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	// MetaFileName is the unencrypted store descriptor, committed with the store.
-	MetaFileName = "vault.json"
+	// DescriptorFile is the unencrypted store descriptor, committed with the store.
+	DescriptorFile = "store.json"
 	ageExt       = ".age"
 
 	dirPerm  = 0o700
@@ -77,24 +77,24 @@ func DefaultDir() string {
 
 // Exists reports whether a store has been initialized at dir.
 func Exists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, MetaFileName))
+	_, err := os.Stat(filepath.Join(dir, DescriptorFile))
 	return err == nil
 }
 
 // ReadMeta reads the store descriptor.
 func ReadMeta(dir string) (Meta, error) {
 	var m Meta
-	data, err := os.ReadFile(filepath.Join(dir, MetaFileName))
+	data, err := os.ReadFile(filepath.Join(dir, DescriptorFile))
 	if err != nil {
 		return m, err
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
-		return m, fmt.Errorf("parsing %s: %w", MetaFileName, err)
+		return m, fmt.Errorf("parsing %s: %w", DescriptorFile, err)
 	}
 	return m, nil
 }
 
-// Init creates the store directory and writes vault.json. It errors if a store
+// Init creates the store directory and writes store.json. It errors if a store
 // already exists. git initialization is the caller's concern.
 func Init(dir string, meta Meta) error {
 	if Exists(dir) {
@@ -110,7 +110,7 @@ func Init(dir string, meta Meta) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(dir, MetaFileName), append(data, '\n'), filePerm)
+	return atomicWrite(filepath.Join(dir, DescriptorFile), append(data, '\n'), filePerm)
 }
 
 // Get decrypts and returns the value for key.
@@ -275,7 +275,7 @@ func (v *Vault) List() ([]string, error) {
 			return nil
 		}
 		if !strings.HasSuffix(d.Name(), ageExt) {
-			return nil // vault.json, RECOVERY.md, anything non-secret
+			return nil // store.json, README.md, anything non-secret
 		}
 		rel, err := filepath.Rel(v.dir, path)
 		if err != nil {

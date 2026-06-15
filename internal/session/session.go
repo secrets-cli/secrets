@@ -122,14 +122,17 @@ func UsableInitSigners() ([]*sshderive.Signer, error) {
 	return nil, fmt.Errorf("no usable SSH key found; create one with `ssh-keygen -t ed25519` and load it with `ssh-add`")
 }
 
-// Create initializes a new store at dir for the given key: writes vault.json and
-// RECOVERY.md, and (when git is available) inits a repo with an initial commit.
+// Create initializes a new store at dir for the given key: writes store.json and
+// README.md, and (when git is available) inits a repo with an initial commit.
 func Create(dir string, signer *sshderive.Signer) error {
 	if err := vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: signer.Fingerprint()}); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "RECOVERY.md"), []byte(recoveryDoc), 0o644); err != nil {
-		return fmt.Errorf("writing RECOVERY.md: %w", err)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(storeReadme), 0o644); err != nil {
+		return fmt.Errorf("writing README.md: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(storeGitignore), 0o644); err != nil {
+		return fmt.Errorf("writing .gitignore: %w", err)
 	}
 	// git is a soft dependency: if it's missing or fails, the store is still
 	// created and fully usable, just without versioning/sync.
@@ -159,27 +162,39 @@ func defaultKeyPath() string {
 	return ""
 }
 
-// recoveryDoc is written to RECOVERY.md so a store can be decrypted even
-// without the vars binary, using only standard tools plus a small script.
-const recoveryDoc = "# Recovering secrets from this store\n\n" +
-	"Each `*.age` file here is encrypted with [age](https://age-encryption.org), but its\n" +
-	"file key is wrapped by a key derived from your SSH key (scheme `ssh-v1`, recorded in\n" +
-	"`vault.json`). The plain `age` CLI therefore cannot open these files by itself.\n\n" +
-	"## Easy path\n\n" +
-	"If the `vars` binary works:\n\n" +
-	"    vars dump          # print every key and value\n\n" +
-	"## Break-glass (no vars binary)\n\n" +
-	"You need the SSH private key whose fingerprint is in `vault.json` (`key_fingerprint`).\n" +
-	"For one file `<key>.age`:\n\n" +
-	"1. In its age header, find the `-> vars-ssh-v1 <salt>` stanza. `<salt>` is base64\n" +
-	"   (raw std). The stanza body is `nonce (12 bytes) || ChaCha20-Poly1305-sealed file key`.\n" +
-	"2. Sign the decoded salt with namespace `vars.store.v1` (SSHSIG, the default sha512):\n\n" +
+// storeGitignore is a default-deny allowlist: the store's git repo tracks only
+// encrypted secrets, the descriptor, and the README — never stray plaintext,
+// editor junk, or the atomic-write temp files. Users can `git add -f` to override.
+const storeGitignore = `# vars store: commit only encrypted secrets, the descriptor, and this README.
+*
+!*/
+!*.age
+!/store.json
+!/README.md
+!/.gitignore
+`
+
+// storeReadme is written as README.md at the store root, so the directory
+// explains itself and documents how to recover secrets without the vars binary.
+const storeReadme = "# vars store\n\n" +
+	"This directory is an encrypted [vars](https://github.com/vars-cli/vars) store: one\n" +
+	"[age](https://age-encryption.org)-encrypted file per secret, each file's key derived\n" +
+	"from an SSH key (scheme `ssh-v1`; the key's fingerprint is in `store.json`).\n\n" +
+	"## Reading these secrets\n\n" +
+	"Use vars — it's open-source and a single static Go binary, so rebuild it if needed:\n\n" +
+	"    go install github.com/vars-cli/vars@latest   # if you don't have the binary\n" +
+	"    vars dump                                      # print every key and value\n" +
+	"    vars get <KEY>                                 # one value\n\n" +
+	"## If vars is unavailable — the format\n\n" +
+	"You need the SSH private key whose fingerprint is in `store.json`. Decryption uses\n" +
+	"standard primitives, so it can be reimplemented in any language with a crypto library\n" +
+	"(it is NOT a sequence of shell commands). For each `<key>.age`:\n\n" +
+	"1. Parse the age header; find the `-> vars-ssh-v1 <salt>` stanza. `<salt>` is base64\n" +
+	"   (raw std). Its body is `nonce (12 bytes) || ChaCha20-Poly1305-sealed file-key`.\n" +
+	"2. Sign the decoded salt with SSHSIG, namespace `vars.store.v1` (hash sha512):\n\n" +
 	"       ssh-keygen -Y sign -n vars.store.v1 -f ~/.ssh/id_ed25519 salt-file\n\n" +
-	"   The `.sig` is SSHSIG armor; its inner signature field is\n" +
-	"   `string(sig-format) || string(sig-blob)` — call those bytes WIRE.\n" +
-	"3. `wrapKey = HKDF-SHA256(secret=WIRE, salt=<decoded salt>, info=\"vars.store.v1/fileKey\", len=32)`\n" +
-	"4. `fileKey = ChaCha20-Poly1305-Open(key=wrapKey, nonce=body[:12], ciphertext=body[12:])`\n" +
-	"5. Decrypt the file with that file key, e.g. in Go:\n" +
-	"   `age.Decrypt(file, age.NewInjectedFileKeyIdentity(fileKey))`.\n\n" +
-	"The authoritative reference for steps 1–5 is `internal/crypto/sshderive` in the\n" +
-	"vars source. `ssh-keygen -Y sign -n vars.store.v1` reproduces step 2 exactly.\n"
+	"   Use the inner signature bytes (`string(format) || string(blob)`) from the `.sig`.\n" +
+	"3. `wrapKey = HKDF-SHA256(secret = signature bytes, salt = decoded salt, info = \"vars.store.v1/fileKey\")` (32 bytes).\n" +
+	"4. `file-key = ChaCha20-Poly1305-Open(wrapKey, nonce, sealed)`.\n" +
+	"5. Decrypt the age payload with that file-key (age's injected-file-key identity).\n\n" +
+	"Reference implementation: `internal/crypto/sshderive` in the vars source.\n"

@@ -49,7 +49,7 @@ type Signer struct {
 }
 
 // Fingerprint returns the SHA256 fingerprint (e.g. "SHA256:…") that identifies
-// the key. It is stored in vault.json to pin which key a store requires.
+// the key. It is stored in store.json to pin which key a store requires.
 func (s *Signer) Fingerprint() string { return s.fingerprint }
 
 // deriveKey returns the 32-byte wrapping key for a given per-file salt.
@@ -172,7 +172,7 @@ func FromFile(path string, passphrase []byte) (*Signer, error) {
 
 // FromAgent returns a Signer for the agent key matching fingerprint. If
 // fingerprint is empty, it selects the single usable key, erroring when zero or
-// several are present (callers should pin a fingerprint via vault.json).
+// several are present (callers should pin a fingerprint via store.json).
 func FromAgent(ag agent.Agent, fingerprint string) (*Signer, error) {
 	keys, err := ag.List()
 	if err != nil {

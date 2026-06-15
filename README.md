@@ -220,7 +220,7 @@ Curious what's under the hood? Three ideas:
 The same SSH key must be available on every machine that opens the store: git
 moves the encrypted files, and your key is what decrypts them. On first run vars
 picks the key in your agent (or asks, if there are several) and records its
-fingerprint in `vault.json`. To force a specific key (CI, a non-standard path,
+fingerprint in `store.json`. To force a specific key (CI, a non-standard path,
 or disambiguation):
 
 ```sh
@@ -239,8 +239,10 @@ export VARS_SSH_KEY=~/.ssh/id_work
 - **What the repo reveals:** values are encrypted, but **key/scope names are
   not** (`prod/PRIVATE_KEY.age` is visible), and git history retains old
   encrypted values.
-- **Break-glass:** every store ships a `RECOVERY.md` showing how to decrypt with
-  `ssh-keygen` plus a short script, so you're never locked into the `vars` binary.
+- **Only encrypted files are committed:** a default-deny `.gitignore` keeps
+  stray plaintext, editor junk, and temp files out of the secrets repo.
+- **Break-glass:** every store ships a `README.md` showing how to unlock with
+  `ssh-keygen` plus the decryption details, so you're never locked into the `vars` binary.
 - **Permissions:** store dir `0700`, files `0600`; atomic writes.
 - **Quantum:** the file cipher is symmetric (safe). The SSH keypair is the
   Shor-vulnerable link, as in every mainstream tool today; rotate long-lived

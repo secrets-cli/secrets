@@ -138,9 +138,9 @@ func TestScopedKeysAreDirectories(t *testing.T) {
 	if got := r.mustRun("get", "prod/PRIVATE_KEY"); got != "0xPROD" {
 		t.Fatalf("get = %q", got)
 	}
-	// The descriptor is vault.json, unencrypted.
-	if _, err := os.Stat(filepath.Join(r.storeDir, "vault.json")); err != nil {
-		t.Fatalf("expected vault.json: %v", err)
+	// The descriptor is store.json, unencrypted.
+	if _, err := os.Stat(filepath.Join(r.storeDir, "store.json")); err != nil {
+		t.Fatalf("expected store.json: %v", err)
 	}
 }
 
