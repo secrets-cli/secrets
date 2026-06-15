@@ -180,5 +180,6 @@ func gitExec(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	return buf.String(), cmd.Run()
+	err := cmd.Run() // must run before reading buf: `return buf.String(), cmd.Run()`
+	return buf.String(), err
 }
