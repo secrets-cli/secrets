@@ -18,11 +18,13 @@ migration.** Export from the old binary and import into the new one (see README)
 - `vars sync`: `pull --rebase` then push. `vars git <args>`: passthrough to git in the store dir.
 - In-tree break-glass `README.md` documenting manual decryption with `ssh-keygen`; a default-deny `.gitignore`.
 - `VARS_SSH_KEY` to pin a specific key; first-run key selection from `ssh-agent`.
+- `vars set KEY -` reads the value from stdin verbatim (the way to store a multi-line secret such as a PEM); a non-interactive `set` with no value now errors instead of silently truncating to one line.
 
 ### Changed
 - Encryption is now per-file age wrapped by an SSH-derived key (was age/scrypt of one blob).
 - History and sync are git-native (`git log` = history, `git push`/`pull` = sync); git is a soft dependency.
 - The store lives at `~/.local/share/vars/store/` (override with `VARS_STORE_DIR`); descriptor is `store.json`.
+- `resolve` emits only valid shell variable names (it rejects such manifest names and skips piped `.env` ones), so its `eval`-able output can't be a shell-injection vector; `--dotenv` errors on a value containing a newline rather than emitting a broken line.
 
 ### Removed
 - The gRPC agent (`vars agent`), the scrypt single-blob store, the passphrase machinery (`vars passwd`, passphrase re-checks, `VARS_AGENT_TTL`/`SOCK`), and the protobuf/grpc dependencies.

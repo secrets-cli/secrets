@@ -53,12 +53,15 @@ vars resolve --fish | source  # fish
 
 That's the main flow. The rest is optional depth.
 
-> **One requirement: an SSH key**, the same kind you already use for GitHub or
-> to log into a server. vars derives each file's encryption from it, so there's
-> no new passphrase to invent. Most people already have one at
-> `~/.ssh/id_ed25519`; if not, create it with `ssh-keygen -t ed25519`. The key
-> must be **Ed25519 or RSA** (ECDSA and FIDO/`sk-` keys sign non-deterministically,
-> so vars can't use them). git is optional, used for history and cross-machine sync.
+> **Only one requirement: an SSH key**, the kind you already use for GitHub or a
+> server. `vars` derives each file's encryption from it, so there's no new passphrase
+> to invent. Most people already have one at `~/.ssh/id_ed25519`; if not, create it
+> with `ssh-keygen -t ed25519`. It must be **Ed25519 or RSA**.
+>
+> If your key has a passphrase, load it into your agent with `ssh-add`: vars signs
+> through `ssh-agent`, so it never asks for the passphrase.
+> 
+> Git is optional, used for history and cross-machine sync.
 
 ---
 
@@ -66,7 +69,8 @@ That's the main flow. The rest is optional depth.
 
 ```sh
 vars set DB_URL "http://user@server/db"
-vars set API_TOKEN               # prompts for the value
+vars set API_TOKEN               # prompts for the value (masked)
+vars set TLS_KEY - < key.pem     # read the value from stdin (for multi-line: PEM, JSON, …)
 vars get DB_URL                  # print the value
 vars ls                          # list keys as a tree
 vars rm API_TOKEN                # delete (use --force to skip confirmation)
@@ -237,13 +241,12 @@ export VARS_SSH_KEY=~/.ssh/id_work
 - **Encryption:** age (ChaCha20-Poly1305). Each file's key is derived from a
   deterministic SSH signature (OpenSSH `SSHSIG`, namespace `vars.store.v1`) run
   through HKDF-SHA256.
-- **No passphrase, no daemon, no socket** to attack: signing goes through your
+- **No passphrase, no daemon, no socket**: signing goes through your
   `ssh-agent` or the key file.
 - **What the repo reveals:** values are encrypted, but **key/scope names are
   not** (`prod/PRIVATE_KEY.age` is visible), and git history retains old
   encrypted values.
-- **Only encrypted files are committed:** a default-deny `.gitignore` keeps
-  stray plaintext, editor junk, and temp files out of the secrets repo.
+- **Only encrypted files are committed**
 - **Break-glass:** every store ships a `README.md` showing how to unlock with
   `ssh-keygen` plus the decryption details, so you're never locked into the `vars` binary.
 - **Permissions:** store dir `0700`, files `0600`; atomic writes.
@@ -257,7 +260,7 @@ export VARS_SSH_KEY=~/.ssh/id_work
 
 ```sh
 vars                          # first run: create the store
-vars set <key> [value]        # add/update a key (prompts if value omitted)
+vars set <key> [value]        # add/update a key (prompts if omitted; "vars set KEY -" reads stdin)
 vars get <key>                # print a value (KEY~N for N versions ago)
 vars ls [scope]               # list keys as a tree (optionally a subtree)
 vars scope ls                 # list scope prefixes
