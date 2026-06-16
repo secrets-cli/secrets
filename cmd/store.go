@@ -50,7 +50,20 @@ func firstRun(dir string) error {
 	if err := session.Create(dir, signer); err != nil {
 		return InternalError(err.Error())
 	}
-	fmt.Fprintf(os.Stderr, "Store created (encrypted to your SSH key, versioned with git).\n")
+
+	// Report what was actually set up (don't claim "versioned with git" when git
+	// is missing or failed), and nudge new users toward an off-machine backup.
+	switch {
+	case git.Available() && git.IsRepo(dir):
+		fmt.Fprintln(os.Stderr, "Store created, encrypted to your SSH key and versioned with git.")
+		fmt.Fprintln(os.Stderr, "Tip: add a remote for an encrypted off-machine backup:")
+		fmt.Fprintln(os.Stderr, "  vars git remote add origin <url>    # then `vars sync`")
+	case !git.Available():
+		fmt.Fprintln(os.Stderr, "Store created, encrypted to your SSH key.")
+		fmt.Fprintln(os.Stderr, "Note: git was not found, so there is no history or backup. Install git to enable versioning and sync.")
+	default: // git present but the repo did not initialize (a warning was already printed)
+		fmt.Fprintln(os.Stderr, "Store created, encrypted to your SSH key, but not versioned (git could not initialize; see the warning above).")
+	}
 	return nil
 }
 

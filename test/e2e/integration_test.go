@@ -1,6 +1,6 @@
 //go:build integration
 
-package main
+package e2e
 
 import (
 	"errors"
@@ -21,7 +21,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	binary = filepath.Join(tmp, "vars")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+	// Build by module path, not ".", since this test package lives in test/e2e.
+	if out, err := exec.Command("go", "build", "-o", binary, "github.com/vars-cli/vars").CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "building binary: %v\n%s\n", err, out)
 		os.Exit(1)
 	}
@@ -569,4 +570,17 @@ func TestSetManifestHintUsesParser(t *testing.T) {
 	if _, se, _ := r.run("set", "UNLISTED", "v"); !strings.Contains(se, "not listed in .vars.yaml") {
 		t.Fatalf("an unlisted key should warn:\n%s", se)
 	}
+}
+
+func TestFirstRunBackupTip(t *testing.T) {
+	r := newRunner(t)
+	_, se, err := r.run("set", "K", "v") // first command creates the store
+	if err != nil {
+		t.Fatalf("set: %v\n%s", err, se)
+	}
+	if _, e := os.Stat(filepath.Join(r.storeDir, ".git")); e != nil {
+		t.Skip("git repo not initialized in this environment")
+	}
+	has(t, se, "versioned with git")         // message reflects that git is active
+	has(t, se, "vars git remote add origin") // one-time backup nudge
 }
