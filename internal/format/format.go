@@ -7,11 +7,24 @@ package format
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
+// validName matches a POSIX shell variable name. Anything else, emitted into an
+// `export <name>=…` line and eval'd, is a shell-injection vector (e.g. a name of
+// `X$(rm -rf ~)`), so resolve must reject names that don't match.
+var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidName reports whether name is a safe shell variable name to export.
+func ValidName(name string) bool { return validName.MatchString(name) }
+
+// HasNewline reports whether a value cannot be represented as a single dotenv
+// line (a newline would be parsed as the start of a new KEY=value entry).
+func HasNewline(value string) bool { return strings.ContainsAny(value, "\r\n") }
+
 // Posix returns an export line for bash/zsh: export KEY='value'
-// Uses single-quote wrapping. Embedded single quotes are escaped as '\''
+// Uses single-quote wrapping. Embedded single quotes are escaped as '\”
 // (end single quote, escaped literal single quote, restart single quote).
 func Posix(key string, value string) string {
 	escaped := strings.ReplaceAll(value, "'", "'\\''")

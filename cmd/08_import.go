@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/vars-cli/vars/internal/agent"
 	"github.com/vars-cli/vars/internal/envfile"
+	"github.com/vars-cli/vars/internal/vault"
 )
 
 var (
@@ -28,7 +29,7 @@ var importCmd = &cobra.Command{
 	Short: "Import keys from a .env file",
 	Long: `Import key-value pairs from a .env file into the store.
 
-Without a scope, keys are imported into the default scope.
+Without a scope, keys are imported as-is.
 With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -38,8 +39,7 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 
 		var scope, filePath string
 		if len(args) == 2 {
-			scope = args[0]
-			filePath = args[1]
+			scope, filePath = args[0], args[1]
 		} else {
 			filePath = args[0]
 		}
@@ -58,79 +58,64 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 			fmt.Fprintln(os.Stderr, "No entries found.")
 			return nil
 		}
-
-		// Apply scope prefix
 		if scope != "" {
 			for i := range entries {
 				entries[i].Key = scope + "/" + entries[i].Key
 			}
 		}
 
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-		sockPath := agentSocketPath()
-
 		isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 
-		type pendingItem struct {
-			key   string
-			value string
-		}
-		var pending []pendingItem
+		var pending []vault.Item
 		var imported, replaced, skipped int
 
 	entryLoop:
 		for _, e := range entries {
-			key := e.Key
-			value := e.Value
-
+			key, value := e.Key, e.Value
 			for {
-				existing, getErr := agent.Get(sockPath, key)
-
+				existing, getErr := v.Get(key)
 				if getErr != nil {
-					// New key
-					pending = append(pending, pendingItem{key, value})
+					if !errors.Is(getErr, vault.ErrNotFound) {
+						// Invalid key (e.g. a bad scope) or a decrypt failure — abort
+						// before writing anything, don't misclassify it as a new key.
+						return UserError(getErr.Error())
+					}
+					pending = append(pending, vault.Item{Key: key, Value: []byte(value)})
 					imported++
 					continue entryLoop
 				}
-
-				if existing == value {
-					// Same value — idempotent, skip silently
+				if string(existing) == value {
 					skipped++
 					continue entryLoop
 				}
-
-				// Conflict: key exists with a different value
 				if importSkip {
 					fmt.Fprintf(os.Stderr, "Skipped %s\n", key)
 					skipped++
 					continue entryLoop
 				}
-
 				if importReplace {
-					pending = append(pending, pendingItem{key, value})
+					pending = append(pending, vault.Item{Key: key, Value: []byte(value)})
 					replaced++
 					continue entryLoop
 				}
-
-				// Interactive mode
 				if !isTTY {
 					return UserError("conflicting keys found; use --replace or --skip to resolve non-interactively")
 				}
 
-				fmt.Fprintf(os.Stderr, "\n%s already exists.\n  current:  %s\n  imported: %s\n", key, existing, value)
+				fmt.Fprintf(os.Stderr, "\n%s already exists.\n  current:  %s\n  imported: %s\n", key, preview(string(existing)), preview(value))
 				choice, err := stdinPrompter().Line("[r]eplace  [n]ew name  [s]kip > ")
 				if err != nil {
 					return UserError(err.Error())
 				}
-
 				switch c := strings.ToLower(strings.TrimSpace(choice)); {
 				case strings.HasPrefix(c, "r"):
-					pending = append(pending, pendingItem{key, value})
+					pending = append(pending, vault.Item{Key: key, Value: []byte(value)})
 					replaced++
 					continue entryLoop
-
 				case strings.HasPrefix(c, "n"):
 					sfx, err := stdinPrompter().Line(fmt.Sprintf("Suffix (saved as %s_<suffix>): ", key))
 					if err != nil {
@@ -143,9 +128,8 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 						continue entryLoop
 					}
 					key = key + "_" + sfx
-					// Re-check the renamed key for conflicts
-
-				default: // includes "s" and anything unrecognised
+					// re-check the renamed key for conflicts
+				default: // "s" or unrecognised
 					fmt.Fprintf(os.Stderr, "Skipped %s\n", key)
 					skipped++
 					continue entryLoop
@@ -154,16 +138,14 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 		}
 
 		if len(pending) > 0 {
-			items := make([]agent.SetItem, len(pending))
-			for i, p := range pending {
-				items[i] = agent.SetItem{Key: p.key, Value: p.value}
-			}
-			if err := agent.Set(sockPath, items); err != nil {
+			msg := fmt.Sprintf("import %d keys from %s", len(pending), filePath)
+			if err := v.SetMany(pending, msg); err != nil {
 				return UserError(err.Error())
 			}
 		}
 
 		fmt.Fprintf(os.Stderr, "Imported %d, replaced %d, skipped %d.\n", imported, replaced, skipped)
+		hintSync(storeDir())
 		return nil
 	},
 }

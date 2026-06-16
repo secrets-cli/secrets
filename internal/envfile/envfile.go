@@ -20,6 +20,7 @@ func Parse(r io.Reader) ([]Entry, error) {
 	var entries []Entry
 	seen := make(map[string]bool)
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024) // allow long single-line values (up to 10 MB)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

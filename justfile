@@ -4,37 +4,16 @@
 help:
     @just --list --unsorted
 
-# Check and install dev toolchain dependencies
+# Check dev toolchain
 [group('dev')]
 setup:
     #!/usr/bin/env bash
     set -euo pipefail
-    ok=1
-    if ! command -v protoc &>/dev/null; then
-        echo "ERROR: protoc not found. Install with: apt install protobuf-compiler  OR  brew install protobuf"
-        ok=0
-    fi
-    if ! command -v protoc-gen-go &>/dev/null; then
-        echo "Installing protoc-gen-go..."
-        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-    fi
-    if ! command -v protoc-gen-go-grpc &>/dev/null; then
-        echo "Installing protoc-gen-go-grpc..."
-        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-    fi
-    if [ $ok -eq 0 ]; then exit 1; fi
+    command -v go >/dev/null || { echo "ERROR: Go not found"; exit 1; }
+    command -v git >/dev/null || echo "WARNING: git not found — versioning/sync will be unavailable"
+    command -v ssh-keygen >/dev/null || echo "WARNING: ssh-keygen not found — break-glass recovery needs it"
+    command -v staticcheck >/dev/null || { echo "Installing staticcheck..."; go install honnef.co/go/tools/cmd/staticcheck@latest; }
     echo "Toolchain ready."
-
-# Regenerate protobuf Go code from agent.proto (commit the result)
-[group('dev')]
-proto:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    command -v protoc-gen-go &>/dev/null || export PATH="$PATH:$HOME/go/bin"
-    protoc --go_out=. --go_opt=paths=source_relative \
-           --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-           internal/agent/agent.proto
-    echo "Generated agent.pb.go and agent_grpc.pb.go — review and commit."
 
 # Format Go source code
 [group('dev')]

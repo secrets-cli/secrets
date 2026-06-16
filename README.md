@@ -1,8 +1,24 @@
 # Key Vars
 
-Secure environment variables for your projects with UNIX-like composability. 
+**One encrypted home for all your project secrets, unlocked by the SSH key you already have.**
 
-One encrypted personal store, shared across all your repos. No more scattered `.env` files, accidental leaks, secrets out of sync or even read by a coding agent.
+`.env` files are a mess: they scatter across repos, sneak into commits, drift
+between your laptop and your server, and sit in plaintext where any script (or
+coding agent) can read them.
+
+`vars` replaces them with a personal, encrypted store, and loads the
+right secrets into any project on demand:
+
+```sh
+vars set DATABASE_URL "postgres://…"   # save a secret, encrypted with your SSH key
+eval "$(vars resolve)"                 # load this project's secrets into the environment
+deno run index.ts                      # your app just sees normal env vars
+```
+
+- **No `.env` files in your repos**: nothing to leak, nothing to gitignore.
+- **No passphrase to remember**: your SSH key unlocks it.
+- **Synced and versioned**: your vars store is a git repo.
+- **Built for teams**: commit a yaml file with the env vars a project needs.
 
 ---
 
@@ -20,58 +36,72 @@ curl -L https://github.com/vars-cli/vars/releases/latest/download/vars_linux_amd
 sudo mv vars /usr/local/bin/
 ```
 
-**2. Store a secret**
+**2. Save a secret** (the first run creates your store automatically)
 
 ```sh
 vars set RPC_URL "https://rpc.example.com"
-vars set PRIVATE_KEY          # prompts for the value (keeps it out of shell history)
+vars set PRIVATE_KEY          # prompts for the value (masked), kept out of shell history
 ```
 
 **3. Use it in a project**
 
 ```sh
-vars init                     # creates .vars.yaml — commit this
-# edit .vars.yaml to list your keys
-eval "$(vars resolve)"        # bash/zsh: loads keys as env vars
+vars init                     # scaffolds .vars.yaml in your project: list your keys here
+eval "$(vars resolve)"        # bash/zsh: load the keys as env vars
+vars resolve --fish | source  # fish
 ```
 
-That's the core loop. The rest is optional.
+That's the main flow. The rest is optional depth.
+
+> **Only one requirement: an SSH key**, the kind you already use for GitHub or a
+> server. `vars` derives each file's encryption from it, so there's no new passphrase
+> to invent. Most people already have one at `~/.ssh/id_ed25519`; if not, create it
+> with `ssh-keygen -t ed25519`. It must be **Ed25519 or RSA**.
+>
+> If your key has a passphrase, load it into your agent with `ssh-add`: vars signs
+> through `ssh-agent`, so it never asks for the passphrase.
+> 
+> Git is optional, used for history and cross-machine sync.
 
 ---
 
-## What this solves
-
-- **No more `.env` leaks** — secrets never touch your project repo
-- **One place for all keys** — personal store shared across projects and scopes
-- **Team-friendly** — commit `.vars.yaml` (what variables the project needs); each developer has their own store
-- **Gradual adoption** — pipe an existing `.env` in; move keys to the store when you can
-- **Multi-environment** — scoped keys (`prod/KEY`, `dev/KEY`, `KEY`) with profiles for different contexts
-
----
-
-## The basics — your personal store
-
-Run `vars` with no arguments to get started. If no store exists yet, it walks you through creating one and choosing a passphrase (optional).
+## Your personal store
 
 ```sh
 vars set DB_URL "http://user@server/db"
-vars set API_TOKEN               # prompts for the value
-vars set PRIVATE_KEY
+vars set API_TOKEN               # prompts for the value (masked)
+vars set TLS_KEY - < key.pem     # read the value from stdin (for multi-line: PEM, JSON, …)
 vars get DB_URL                  # print the value
-vars ls                          # list the keys
+vars ls                          # list keys as a tree
+vars rm API_TOKEN                # delete (use --force to skip confirmation)
+vars mv OLD NEW                  # rename the key
+vars dump                        # print everything (debugging / migration)
 ```
 
-The first time you run a command you'll be asked for your passphrase. After that, the store stays unlocked in your session for 8 hours — no re-entering it between commands or across terminal sessions.
+The store lives at `~/.local/share/vars/store/` by default (override with
+`VARS_STORE_DIR`). It's just a directory of encrypted `.age` files with optional versioning.
+
+---
+
+## Scopes
+
+As your store grows, group related keys with `/`-delimited scopes. They behave like directories and show up as a tree:
+
+```sh
+vars set prod/PRIVATE_KEY "0xPROD"
+vars set dev/PRIVATE_KEY  "0xDEV"
+vars set dev/temp/RPC_URL "http://localhost:8545"   # nested
+
+vars ls            # tree of everything
+vars ls dev        # just the dev/ subtree
+vars scope ls      # list scope prefixes (dev, dev/temp, prod)
+```
 
 ---
 
 ## Using in a project
 
-Add `.vars.yaml` to your project declaring the env var names it needs. Commit it:
-
-```sh
-vars init                         # scaffolds .vars.yaml with examples
-```
+Add a committed `.vars.yaml` declaring the env vars the project needs:
 
 ```yaml
 # .vars.yaml
@@ -81,52 +111,28 @@ keys:
   - PRIVATE_KEY
 ```
 
-Then resolve them into your shell, on demand:
+`vars resolve` reads it, looks each key up in your store, and prints shell-ready
+exports: nothing is written to disk.
 
 ```sh
 eval "$(vars resolve)"            # bash/zsh
-vars resolve --fish | source      # fish
+docker run --env-file <(vars resolve --dotenv) my-image   # docker, no temp file
 ```
 
-`resolve` reads the manifest, looks up each key in your store, and prints shell-ready `export` statements with the right values to load into your shell. Nothing is written to disk.
+### Profiles
 
-Each developer uses their own store. The `.env.vars` manifest is the shared contract; the secrets are personal.
-
----
-
-## Scoped keys
-
-As your store grows, you may have multiple variants of the same key — a `prod` key, a `dev` key, etc. A naming convention keeps them organised: prefix with a scope, separated by `/`.
-
-```sh
-vars set prod/PRIVATE_KEY "0xPROD_KEY"
-vars set dev/PRIVATE_KEY "0xDEV_KEY"
-vars set dev/temp/PRIVATE_KEY "0xTEMP_KEY"     # nested scope
-vars set SERVER_API_KEY "abc123"               # shared, no scope needed
-```
-
-```sh
-vars ls                   # top-level keys only
-vars ls prod              # keys under prod/
-vars ls -a                # all keys from all scopes
-vars scope ls             # list all scope prefixes in the store
-```
-
----
-
-## Profiles — resolving the right scope
-
-Profiles are named sets of `env var → store key` mappings, declared in `.vars.yaml`. They tell `resolve` which scope/key to use for each run.
+Profiles are named `env var → store key` mappings in `.vars.yaml`. They tell
+`resolve` which scope/key to use per run.
 
 ```yaml
-# .vars.yaml
 keys:
   - PRIVATE_KEY
   - RPC_URL
   - SERVER_API_KEY
-
 profiles:
-  default:
+  global:                              # always applied as a fallback
+    SERVER_API_KEY: SERVER_API_KEY_v2
+  default:                             # auto-applied when no --profile is given
     PRIVATE_KEY: dev/PRIVATE_KEY
     RPC_URL: sepolia/RPC_URL
   mainnet:
@@ -135,357 +141,168 @@ profiles:
 ```
 
 ```sh
-vars resolve              # "default" profile applied automatically
-vars resolve -p mainnet   # use the mainnet profile
+vars resolve                # "default" profile applied automatically
+vars resolve -p mainnet     # use the mainnet profile
 ```
 
-### Scope fallback in resolve
-
-When resolving a key, `resolve` searches from most specific to least — stripping one scope level at a time:
-
-`dev/temp/RPC_URL`  →  `dev/RPC_URL`  →  `RPC_URL`  →  not found
-
-This lets profiles reference specific scoped keys even if you've only stored the base key.
-
-### The `global:` profile
-
-`global:` is a reserved profile name that is always applied as a fallback, regardless of which profile is active. Use it for base aliases that apply to every context:
+Inline values: `= value` always emits that literal; `?= value` uses the store
+value if present, else the default.
 
 ```yaml
 profiles:
   global:
-    SERVER_API_KEY: SERVER_API_KEY_v2    # applies in every profile
-  default:
-    PRIVATE_KEY: dev/PRIVATE_KEY
-  mainnet:
-    PRIVATE_KEY: prod/PRIVATE_KEY        # overrides global: if it were there too
+    LOG_LEVEL: = info                  # always "info", no store lookup
+    RPC_URL: ?= http://localhost:8545  # store wins; falls back to localhost
 ```
 
-The active profile always takes precedence over `global:`. `global:` fills in what the active profile doesn't cover.
+### Scope fallback
 
-All keys used in a profile need to be listed in `keys:`. Profiles only provide mappings; `keys:` is what gets resolved.
+When resolving a key, vars tries the most specific store key first, then strips
+the **deepest** scope one level at a time:
 
-### Inline literals and defaults
-
-Profile values support two special prefixes:
-
-| Syntax | Behaviour |
-|--------|-----------|
-| `= value` | Emit this literal value — no store lookup |
-| `?= value` | Use an available value if present and non-empty; otherwise emit this default |
-
-```yaml
-profiles:
-  global:
-    LOG_LEVEL: = info                    # emits "info", no store lookup
-    RPC_URL: ?= http://localhost:8545    # store wins; falls back to localhost if missing
-  ci:
-    DRY_RUN: = true
-    API_URL: ?= http://localhost:8080
+```
+main/dev/RPC_URL  →  main/RPC_URL  →  RPC_URL  →  not found
 ```
 
----
+### Local overrides
 
-## Local overrides
+`.vars.local.yaml` (git-ignored) overrides `.vars.yaml` per-key per-profile:
+your local deviations from the team's convention.
 
-Profiles in `.vars.yaml` are committed: they are the team's shared convention. For local overrides you can add `.vars.local.yaml` alongside `.vars.yaml`. It should be git-ignored; never commit it.
+### Working with existing env vars / fallbacks
 
-`.vars.local.yaml` has the same structure as `.vars.yaml`, minus `keys:`:
-
-```yaml
-# .vars.local.yaml
-profiles:
-  global:
-    PRIVATE_KEY: prod/PRIVATE_KEY_alice_hw    # override for all profiles
-  mainnet:
-    RPC_URL: prod/RPC_URL_quicknode           # only override this one key in mainnet
-```
-
-Local overrides take priority over `.vars.yaml`, per key, per profile.
-
----
-
-## Working with existing env vars
-
-You can pipe existing `.env` files into `vars resolve`. Store values take priority for manifest keys; the dotenv acts as a fallback for keys not yet in the store. Any keys not declared in the manifest pass through unchanged.
+Pipe a `.env` in: store values win for manifest keys, the dotenv fills the gaps,
+and non-manifest keys pass through. If a key is missing from both, the current
+shell env is the last fallback.
 
 ```sh
-cat .env | vars resolve             # error if a manifest key is missing from both sources
-cat .env | vars resolve --partial   # ignore keys missing from both, pass the rest through
-```
-
-If a manifest key isn't found in the store or a piped `.env`, then `vars resolve` checks the current shell as a last fallback. If the variable already exists, no export is emitted (the value is already there). Otherwise, an error is thrown.
-
-Use `--origin` to see where each value came from:
-
-```sh
-$ cat .env | vars resolve --partial --origin
-export DB_URL='postgres://...'  # vars
-export API_TOKEN='xyz'          # .env
-export LOG_LEVEL='info'         # manifest
-export RPC_URL='http://...'     # manifest
-# PRIVATE_KEY  shell
-# STRIPE_SECRET  missing
+cat .env | vars resolve --partial          # skip keys missing everywhere
+cat .env | vars resolve --partial --origin # annotate where each value came from
 ```
 
 | Origin | Meaning |
 |--------|---------|
-| `vars` | Value from the encrypted store |
-| `.env` | Value from piped stdin (dotenv file) |
-| `manifest` | Inline literal (`= value`) or inline default (`?= value`) |
-| `shell` | Already in the calling shell (no export emitted) |
-| `missing` | Not found anywhere (only appears with `--partial`) |
+| `vars` | from the encrypted store |
+| `.env` | from piped stdin |
+| `manifest` | inline `= value` / `?= default` |
+| `shell` | already in the calling shell (no export emitted) |
+| `missing` | not found anywhere (only with `--partial`) |
 
 ---
 
-## More use cases
+## History and versions (git)
 
-### Scripts and task runners
-
-```just
-# justfile
-deploy:
-    #!/usr/bin/env bash
-    eval "$(vars resolve -p mainnet)"
-    forge script script/Deploy.s.sol --broadcast
-
-test:
-    #!/usr/bin/env bash
-    eval "$(vars resolve)"
-    forge test
-```
-
-### Docker containers
-
-Pass secrets to a container without writing anything to disk, using bash process substitution:
+When the store is a git repo, every change is committed automatically.
 
 ```sh
-docker run --env-file <(vars resolve --dotenv) my-image
+vars history RPC_URL        # the change log for one key
+vars get RPC_URL~1          # the previous value
+vars get RPC_URL~2          # two versions ago  (git's HEAD~N convention)
+vars git remote add origin git@github.com:me/secrets.git
+vars git log                # run any git command in the store dir
+vars sync                   # pull --rebase, then push
 ```
 
-`--dotenv` outputs bare `KEY=value` (no quoting), compatible with `docker --env-file`. The `<(...)` process substitution means the output never touches the filesystem.
-
-### Migrating from `.env` files
-
-```sh
-vars import .env                    # import keys
-vars import my-project/dev .env     # import with a scope prefix → my-project/dev/KEY_NAME
-rm .env
-```
-
-Conflicts are handled interactively (replace, new name, skip). Use `--replace` or `--skip` for non-interactive imports.
-
-### Integrating with external vaults
-
-`vars` resolves to plain env vars, so it composes with anything.
-
-```just
-# justfile
-sync:
-    vars set dev/RPC_URL      "$(op read 'op://dev/rpc/url')"             # 1Password
-    vars set dev/API_KEY      "$(vault kv get -field=value dev/api_key)"  # HashiCorp Vault
-    vars set dev/SECRET       "$(aws secretsmanager get-secret-value --secret-id dev/secret --query SecretString --output text)"
-```
-
-Run this during onboarding or after a key rotation. As before, `--skip` leaves existing keys untouched; `--replace` replaces them.
-
-### Renaming and removing keys
-
-```sh
-vars mv OLD_KEY NEW_KEY           # atomic rename — prompts for confirmation
-vars mv OLD_KEY NEW_KEY --force   # skip prompt (scripts / CI)
-vars rm OLD_KEY                   # delete key and its history — prompts for confirmation
-vars rm OLD_KEY --force           # skip prompt
-```
-
-## Checking older values
-
-```sh
-vars history RPC_URL
-# RPC_URL~3:	https://rpc-v2.example.com   (most recent)
-# RPC_URL~2:	https://rpc-v1.example.com
-# RPC_URL~1:	https://rpc-old.example.com
-vars get RPC_URL~2          # retrieve a specific backup
-```
-
----
-
-## Command reference
-
-### Store management
-
-```sh
-vars set <key> [value]        # Set a value (prompts if omitted)
-vars get <key>                # Print a value to stdout
-vars ls [scope]               # List keys (filtered to scope if given)
-vars ls -a                    # List all keys with full names
-vars scope ls                 # List all scope prefixes in the store
-vars mv <old> <new>           # Rename a key (history moves with it)
-vars rm <key>...              # Delete one or more keys and their history
-vars history <key>            # Show value history (newest first)
-vars import [scope] <file>    # Import from a .env file
-vars dump                     # Dump all store keys and values
-vars passwd                   # Change the store passphrase
-```
-
-### Project integration
-
-```sh
-vars init                     # Scaffold .vars.yaml in the current directory
-vars resolve [flags]          # Resolve manifest keys as shell exports
-```
-
-### Agent
-
-```sh
-vars agent [--ttl N]          # Adjust daemon lifetime (default: 8h)
-vars agent --stdin            # Start agent, read passphrase from stdin (CI)
-vars agent stop               # Wipe memory and stop immediately
-```
-
-### `set` flags
-
-| Flag | Description |
-|------|-------------|
-| `--replace` | Replace existing key without prompting |
-| `--skip` | Do nothing if key already exists |
-
-When a key exists with a different value and neither flag is given, `set` prompts: `[r]eplace  [n]ew name  [s]kip`. Same value is a no-op.
-
-### `import` flags
-
-| Flag | Description |
-|------|-------------|
-| `--replace` | Replace all conflicting keys |
-| `--skip` | Keep existing keys, only import new ones |
-
-### `resolve` flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-f`, `--file` | `.vars.yaml` | Path to manifest file |
-| `-p`, `--profile` | — | Active profile (`default` auto-applied if present) |
-| `--dotenv` | — | Output as bare `KEY=value` (compatible with `docker --env-file`) |
-| `--fish` | — | Output in fish shell format |
-| `--partial` | — | Skip missing keys instead of erroring |
-| `--origin` | — | Annotate each line with its source |
-
-### `mv` flags
-
-| Flag | Description |
-|------|-------------|
-| `-f`, `--force` | Skip confirmation prompt |
-
-### `rm` flags
-
-| Flag | Description |
-|------|-------------|
-| `-f`, `--force` | Skip confirmation prompt |
+After a change, vars reminds you to `vars sync` when a remote is configured.
 
 ---
 
 ## How it works
 
-### Resolution priority
+Curious what's under the hood? Three ideas:
 
-When resolving a key with `--profile mainnet`:
+- **One file per secret.** Each value is an [age](https://age-encryption.org)-encrypted
+  file under your store directory; scopes are just subdirectories. That's what
+  makes the store diff cleanly and live in git.
+- **Your SSH key is the lock.** The encryption key for each file is derived from
+  a deterministic signature by your Ed25519/RSA key, via `ssh-agent`. There's no
+  passphrase to invent and no daemon of ours to run: signing is the one thing
+  the agent already does. (ECDSA and FIDO/`sk-` keys sign non-deterministically,
+  so they can't be used.)
+- **git is the history and the sync.** The store is an ordinary git repo, so
+  `git log` is your history and `git push`/`pull` moves secrets between your
+  machines. git is optional: without it everything still works,
+  versioning is opt-in.
 
-1. `mainnet` profile, `.vars.local.yaml`
-2. `mainnet` profile, `.vars.yaml`
-3. `global:` profile, `.vars.local.yaml`
-4. `global:` profile, `.vars.yaml`
-5. Bare key (identity — key name equals store key)
-
-### Scope fallback
-
-When looking up a store key, `vars` tries progressively less specific:
-
-`prod/dev/RPC_URL`  →  `prod/RPC_URL`  →  `RPC_URL`  →  not found
-
----
-
-## The agent
-
-The first command that needs the store auto-starts an agent: it decrypts the store into memory and serves all subsequent requests from there. You type your passphrase once and it stays unlocked for 8 hours.
-
-You only need to interact with it directly to change the lifetime:
+The same SSH key must be available on every machine that opens the store: git
+moves the encrypted files, and your key is what decrypts them. On first run vars
+picks the key in your agent (or asks, if there are several) and records its
+fingerprint in `store.json`. To force a specific key (CI, a non-standard path,
+or disambiguation):
 
 ```sh
-vars agent --ttl 4h    # restart with a shorter lifetime
-vars agent --ttl 0     # never expire
-vars agent stop        # wipe memory and exit immediately
-```
-
-To set a persistent default, add `VARS_AGENT_TTL` to your shell profile:
-
-```sh
-export VARS_AGENT_TTL=4h   # e.g. 15, 60s, 30m, 4h, 12h, 1d, 0 for unlimited
-```
-
-### CI and non-interactive use
-
-Pre-start the agent with the passphrase before running other commands (use an empty string if no passphrase was set):
-
-```sh
-echo "$STORE_PASSPHRASE" | vars agent --stdin
-cat .env | vars resolve --partial
-```
-
-All destructive commands support flags for non-interactive flows. Use these in scripts to skip confirmation prompts:
-
-```sh
-vars set KEY value --replace          # replace without prompt
-vars import .env --replace            # import, replacing conflicts
-vars mv OLD_KEY NEW_KEY --force       # rename without prompt
-vars rm KEY --force                   # delete without prompt
+export VARS_SSH_KEY=~/.ssh/id_work
 ```
 
 ---
 
 ## Security
 
-- **Encryption**: [age](https://age-encryption.org) with scrypt key derivation (`filippo.io/age`)
-- **No plaintext on disk**: secrets are never written unencrypted
-- **Memory zeroing**: decrypted buffers are zeroed when the agent exits
-- **Permissions**: store directory `0700`, file `0600`
-- **Atomic writes**: temp file + rename prevents partial writes on crash
-- **Empty passphrase**: supported: same model as unprotected SSH keys
+- **Encryption:** age (ChaCha20-Poly1305). Each file's key is derived from a
+  deterministic SSH signature (OpenSSH `SSHSIG`, namespace `vars.store.v1`) run
+  through HKDF-SHA256.
+- **No passphrase, no daemon, no socket**: signing goes through your
+  `ssh-agent` or the key file.
+- **What the repo reveals:** values are encrypted, but **key/scope names are
+  not** (`prod/PRIVATE_KEY.age` is visible), and git history retains old
+  encrypted values.
+- **Only encrypted files are committed**
+- **Break-glass:** every store ships a `README.md` showing how to unlock with
+  `ssh-keygen` plus the decryption details, so you're never locked into the `vars` binary.
+- **Permissions:** store dir `0700`, files `0600`; atomic writes.
+- **Quantum:** the file cipher is symmetric (safe). The SSH keypair is the
+  Shor-vulnerable link, as in every mainstream tool today; rotate long-lived
+  secrets and don't treat the store as an eternal archive.
 
-The store lives at `~/.local/share/vars/` by default (XDG). Override with `VARS_STORE_DIR`.
+---
+
+## Command reference
+
+```sh
+vars                          # first run: create the store
+vars set <key> [value]        # add/update a key (prompts if omitted; "vars set KEY -" reads stdin)
+vars get <key>                # print a value (KEY~N for N versions ago)
+vars ls [scope]               # list keys as a tree (optionally a subtree)
+vars scope ls                 # list scope prefixes
+vars mv <old> <new>           # rename a key (-f to skip the prompt)
+vars rm <key>...              # delete keys (-f to skip the prompt)
+vars history <key>            # change history for a key
+vars import [scope] <file>    # import key=value pairs from a .env file
+vars dump                     # print all keys and values
+vars init                     # scaffold .vars.yaml in the current directory
+vars resolve [flags]          # resolve manifest keys as shell exports
+vars git <args>               # run git in the store directory
+vars sync                     # pull + push the store to its remote
+```
+
+`resolve` flags: `-f/--file`, `-p/--profile`, `--dotenv`, `--fish`, `--partial`,
+`--origin`. `set`/`import` take `--replace`/`--skip`; `mv`/`rm` take `-f/--force`.
 
 ---
 
 ## Development
 
-Requires Go 1.22+, [just](https://github.com/casey/just), and `protoc` (only for proto regeneration).
+Requires Go 1.25+ and [just](https://github.com/casey/just). git is used at
+runtime for versioning; `ssh-keygen` for tests.
 
 ```sh
-$ just
-Available recipes:
-    help             # Default recipe: show help
-
-    [dev]
-    setup            # Check and install dev toolchain dependencies
-    proto            # Regenerate protobuf Go code from agent.proto (commit the result)
-    fmt              # Format Go source code
-    vet              # Run go vet
-    lint             # Run staticcheck linter
-    check            # Pre-commit quality gate: vet + lint + test
-
-    [test]
-    test             # Run unit tests
-    test-v           # Run unit tests with verbose output
-    test-integration # Run integration tests (requires built binary)
-    test-race        # Run unit tests with race detector
-    test-all         # Run all tests (unit + integration)
-    coverage         # Generate test coverage report
-    smoke            # Quick end-to-end smoke test against a temp store
-
-    [build]
-    build            # Build the binary
-    install          # Install to GOPATH/bin
-    cross-compile    # Cross-compile for all supported platforms
-
-    [release]
-    release-dry      # Dry-run goreleaser
+just            # list all recipes
+just check      # vet + lint + test
+just test-all   # unit + integration tests
+just smoke      # end-to-end smoke test against a temp store
+just build      # build the binary
 ```
+
+---
+
+## Migrating from an older vars (v0.5)
+
+The store format changed, so migrate with the old binary's `dump` piped into the
+new `import` (no plaintext touches disk):
+
+```sh
+vars-new import <(vars-0.5 dump --dotenv)
+```
+
+History does not carry over (only current values). The old store is left
+untouched at its old location.

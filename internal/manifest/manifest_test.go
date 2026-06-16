@@ -236,7 +236,7 @@ profiles:
 	}
 	expected := map[string]string{
 		"FOO": "FOO_remapped",
-		"BAR": "BAR",          // not in global → identity
+		"BAR": "BAR", // not in global → identity
 		"BAZ": "BAZ_personal",
 	}
 	for _, v := range vars {

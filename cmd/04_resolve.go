@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/agent"
 	"github.com/vars-cli/vars/internal/envfile"
 	"github.com/vars-cli/vars/internal/format"
 	"github.com/vars-cli/vars/internal/manifest"
+	"github.com/vars-cli/vars/internal/vault"
 )
 
 var (
@@ -77,20 +78,27 @@ Mapping values may use special prefixes:
 			fmt.Fprintf(os.Stderr, "vars: warning: profile %q not found in manifest\n", resolveProfile)
 		}
 
-		sockPath := agentSocketPath()
+		// resolve's output is meant to be eval'd, so an env var name that isn't a
+		// valid shell identifier is a command-injection vector. The manifest is the
+		// user's own file, so reject loudly.
+		for _, v := range vars {
+			if !format.ValidName(v.EnvName) {
+				return UserError(fmt.Sprintf("invalid env var name %q in manifest (must match [A-Za-z_][A-Za-z0-9_]*)", v.EnvName))
+			}
+		}
 
-		// Check stdin pipe before touching the agent — if stdin is piped, we
-		// cannot prompt interactively, so fail fast if the agent isn't already up.
+		// A piped stdin means a dotenv fallback. We can't prompt when piped, so a
+		// missing store is a hard error rather than the interactive create wizard.
 		stdinPiped := func() bool {
 			fi, err := os.Stdin.Stat()
 			return err == nil && fi.Mode()&os.ModeCharDevice == 0
 		}()
-
-		if stdinPiped && !agent.IsRunning(sockPath) {
-			return UserError("agent is not running; start it first with `vars agent`")
+		if stdinPiped && !vault.Exists(storeDir()) {
+			return UserError("no store found; create one first by running `vars`")
 		}
 
-		if err := ensureAgent(); err != nil {
+		vlt, err := openVault()
+		if err != nil {
 			return err
 		}
 
@@ -128,7 +136,12 @@ Mapping values may use special prefixes:
 				entries = append(entries, entry{v.EnvName, v.InlineValue, "manifest"})
 				continue
 			}
-			val, lookupErr := resolveStoreKey(sockPath, v.StoreKey)
+			val, lookupErr := resolveStoreKey(vlt, v.StoreKey)
+			// A real failure (decrypt / IO) must surface, not be masked as "missing"
+			// and silently swallowed into a default or fallback.
+			if lookupErr != nil && !errors.Is(lookupErr, vault.ErrNotFound) {
+				return UserError(lookupErr.Error())
+			}
 			if v.HasDefault && (lookupErr != nil || val == "") {
 				entries = append(entries, entry{v.EnvName, v.DefaultValue, "manifest"})
 				continue
@@ -151,6 +164,9 @@ Mapping values may use special prefixes:
 					continue
 				}
 				if v.StoreKey == v.EnvName {
+					if hint := resolveProfileHint(v.EnvName, resolveFile, localPath, resolveProfile); hint != "" {
+						return UserError(hint)
+					}
 					return UserError(fmt.Sprintf("key %q not found in store", v.EnvName))
 				}
 				return UserError(fmt.Sprintf("key %q not found in store (mapped from %q)", v.StoreKey, v.EnvName))
@@ -158,9 +174,15 @@ Mapping values may use special prefixes:
 			entries = append(entries, entry{v.EnvName, val, "vars"})
 		}
 
-		// Pass through stdin dotenv keys not declared in the manifest
+		// Pass through stdin dotenv keys not declared in the manifest. These come
+		// from an untrusted .env, so skip names that aren't valid shell identifiers
+		// rather than emit an injectable `export` line.
 		for _, e := range stdinEntries {
 			if !manifestKeys[e.Key] {
+				if !format.ValidName(e.Key) {
+					fmt.Fprintf(os.Stderr, "vars: warning: skipping invalid env var name %q from stdin\n", e.Key)
+					continue
+				}
 				entries = append(entries, entry{e.Key, e.Value, ""})
 			}
 		}
@@ -175,6 +197,9 @@ Mapping values may use special prefixes:
 					fmt.Fprintf(os.Stdout, "# %s  shell\n", e.envName)
 				}
 			default:
+				if resolveDotenv && format.HasNewline(e.value) {
+					return UserError(fmt.Sprintf("value for %q contains a newline; not representable in --dotenv format", e.envName))
+				}
 				if resolveOrigin && e.source != "" {
 					fmt.Fprintf(os.Stdout, "%s  # %s\n", formatter(e.envName, e.value), e.source)
 				} else {
@@ -187,18 +212,113 @@ Mapping values may use special prefixes:
 	},
 }
 
-// resolveStoreKey tries the given key, then falls back by stripping successive
-// scope prefixes: "main/dev/RPC_URL" → "dev/RPC_URL" → "RPC_URL".
-func resolveStoreKey(sockPath, key string) (string, error) {
+// resolveProfileHint scans all profiles in the manifest and local manifest for
+// any mapping of envName. When found (and no profile is currently active), it
+// returns a user-friendly error hint explaining which profile(s) can resolve the key.
+// Returns "" when no hint is applicable. Loads the manifests itself: this runs
+// only on the key-not-found error path, so the parse cost is never on the happy path.
+func resolveProfileHint(envName, manifestPath, localPath, activeProfile string) string {
+	m, err := manifest.Load(manifestPath)
+	if err != nil {
+		return ""
+	}
+	local, err := manifest.LoadLocal(localPath)
+	if err != nil {
+		return ""
+	}
+
+	type mapping struct {
+		profile  string
+		storeKey string
+	}
+	var mappings []mapping
+
+	// Collect mappings from all non-global profiles in both manifests.
+	// Skip the currently active profile since its mappings are already being used.
+	for name, pm := range m.Profiles {
+		if name == "global" || name == activeProfile {
+			continue
+		}
+		if sk, ok := pm[envName]; ok {
+			mappings = append(mappings, mapping{name, sk})
+		}
+	}
+	for name, pm := range local.Profiles {
+		if name == "global" || name == activeProfile {
+			continue
+		}
+		if sk, ok := pm[envName]; ok {
+			mappings = append(mappings, mapping{name, sk})
+		}
+	}
+
+	if len(mappings) == 0 {
+		return ""
+	}
+
+	// Build the hint message.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("key %q not found in store\n\n", envName))
+
+	if len(mappings) == 1 {
+		m := mappings[0]
+		sb.WriteString(fmt.Sprintf("Hint: profile %q maps %s → %s\n", m.profile, envName, m.storeKey))
+		if activeProfile == "" {
+			sb.WriteString(fmt.Sprintf("Try: vars resolve --profile %s\n", m.profile))
+		}
+	} else {
+		sb.WriteString("Hint: these profiles map " + envName + " to a store key:\n")
+		for _, m := range mappings {
+			sb.WriteString(fmt.Sprintf("  - %s → %s\n", m.profile, m.storeKey))
+		}
+		if activeProfile == "" {
+			sb.WriteString("\nTry: vars resolve --profile <profile-name>\n")
+		}
+	}
+
+	// List all available profiles (including global and active if present).
+	var allProfiles []string
+	for name := range m.Profiles {
+		allProfiles = append(allProfiles, name)
+	}
+	for name := range local.Profiles {
+		found := false
+		for _, p := range allProfiles {
+			if p == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			allProfiles = append(allProfiles, name)
+		}
+	}
+	if len(allProfiles) > 0 {
+		sb.WriteString("Available profiles: " + strings.Join(allProfiles, ", "))
+	}
+
+	return sb.String()
+}
+
+// resolveStoreKey tries the given key, then falls back by stripping the deepest
+// scope one level at a time: "main/dev/RPC_URL" → "main/RPC_URL" → "RPC_URL".
+// The deepest (leaf-adjacent) scope is dropped first so outer scopes act as the
+// broader fallback, matching the documented hierarchical semantics.
+func resolveStoreKey(v *vault.Vault, key string) (string, error) {
 	for {
-		val, err := agent.Get(sockPath, key)
+		val, err := v.Get(key)
 		if err == nil {
-			return val, nil
+			return string(val), nil
 		}
-		i := strings.IndexByte(key, '/')
-		if i < 0 {
-			return "", err
+		if !errors.Is(err, vault.ErrNotFound) {
+			return "", err // decrypt/IO failure — surface it, don't keep stripping
 		}
-		key = key[i+1:]
+		// Drop the scope segment immediately before the leaf key name.
+		last := strings.LastIndexByte(key, '/')
+		if last < 0 {
+			return "", err // no scope left to strip
+		}
+		prev := strings.LastIndexByte(key[:last], '/')
+		key = key[:prev+1] + key[last+1:]
 	}
 }

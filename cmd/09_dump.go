@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vars-cli/vars/internal/agent"
 	"github.com/vars-cli/vars/internal/format"
 )
 
@@ -37,21 +36,34 @@ Intended for debugging and migration only.`,
 
 		fmt.Fprintln(os.Stderr, "vars: dumping all variables from the store")
 
-		if err := ensureAgent(); err != nil {
+		v, err := openVault()
+		if err != nil {
 			return err
 		}
-
-		sockPath := agentSocketPath()
-		keys, err := agent.List(sockPath)
+		keys, err := v.List()
 		if err != nil {
 			return InternalError(err.Error())
 		}
-
+		// Recovery/migration path: dump everything we can, warn on what we can't,
+		// and exit non-zero if any key failed — one bad file must not hide the rest.
+		failed := false
 		for _, key := range keys {
-			val, _ := agent.Get(sockPath, key)
-			fmt.Fprintln(os.Stdout, formatter(key, val))
+			val, err := v.Get(key)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "vars: warning: skipping %q: %v\n", key, err)
+				failed = true
+				continue
+			}
+			if dumpDotenv && format.HasNewline(string(val)) {
+				fmt.Fprintf(os.Stderr, "vars: warning: skipping %q: value has a newline, not representable in --dotenv\n", key)
+				failed = true
+				continue
+			}
+			fmt.Fprintln(os.Stdout, formatter(key, string(val)))
 		}
-
+		if failed {
+			return InternalError("some keys could not be dumped (see warnings above)")
+		}
 		return nil
 	},
 }

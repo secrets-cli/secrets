@@ -6,10 +6,10 @@ import (
 
 // testCase defines an input value and expected outputs for each format.
 type testCase struct {
-	name  string
-	value string
-	posix string
-	fish  string
+	name   string
+	value  string
+	posix  string
+	fish   string
 	dotenv string
 }
 
@@ -182,3 +182,33 @@ func TestDotenv(t *testing.T) {
 	}
 }
 
+func TestValidName(t *testing.T) {
+	valid := []string{"RPC_URL", "_x", "A1", "lower_case", "ALL_CAPS_99"}
+	invalid := []string{
+		"", "2FA", "prod/KEY", "FOO BAR", "a-b", "KEY=v",
+		"EVIL$(touch x)", "X;rm -rf ~", "a\nb", "café",
+	}
+	for _, s := range valid {
+		if !ValidName(s) {
+			t.Errorf("ValidName(%q) = false, want true", s)
+		}
+	}
+	for _, s := range invalid {
+		if ValidName(s) {
+			t.Errorf("ValidName(%q) = true, want false (would be unsafe to eval)", s)
+		}
+	}
+}
+
+func TestHasNewline(t *testing.T) {
+	for _, s := range []string{"a\nb", "a\r\nb", "trailing\n", "\r"} {
+		if !HasNewline(s) {
+			t.Errorf("HasNewline(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "single line", "no\tnewline here"} {
+		if HasNewline(s) {
+			t.Errorf("HasNewline(%q) = true, want false", s)
+		}
+	}
+}
