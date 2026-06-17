@@ -2,7 +2,7 @@
 
 **One encrypted home for all your project secrets, unlocked by the SSH key you already have.**
 
-`.env` files are a mess: they scatter across repos, sneak into commits, drift
+`.env` files are messy: they scatter across repos, sneak into commits, drift
 between your laptop and your server, and sit in plaintext where any script (or
 coding agent) can read them.
 
@@ -16,9 +16,9 @@ deno run index.ts                      # your app just sees normal env vars
 ```
 
 - **No `.env` files in your repos**: nothing to leak, nothing to gitignore.
-- **No passphrase to remember**: your SSH key unlocks it.
+- **No passphrase to remember**: your SSH key/agent unlocks it.
 - **Synced and versioned**: your vars store is a git repo.
-- **Built for teams**: commit a yaml file with the env vars a project needs.
+- **Built for teams**: list the env vars that a project needs and vars resolves them.
 
 ---
 
@@ -54,12 +54,14 @@ vars resolve --fish | source  # fish
 That's the main flow. The rest is optional depth.
 
 > **Only one requirement: an SSH key**, the kind you already use for GitHub or a
-> server. `vars` derives each file's encryption from it, so there's no new passphrase
-> to invent. Most people already have one at `~/.ssh/id_ed25519`; if not, create it
-> with `ssh-keygen -t ed25519`. It must be **Ed25519 or RSA**.
+> server.
+>
+> `vars` derives each file's encryption from SSH. Most people already have an
+> SSH key at `~/.ssh/id_ed25519`; if not, create it with `ssh-keygen -t ed25519`.
+> It must be **Ed25519 or RSA**.
 >
 > If your key has a passphrase, load it into your agent with `ssh-add`: vars signs
-> through `ssh-agent`, so it never asks for the passphrase.
+> through `ssh-agent`, so you're never asked for the passphrase.
 > 
 > Git is optional, used for history and cross-machine sync.
 
@@ -101,7 +103,8 @@ vars scope ls      # list scope prefixes (dev, dev/temp, prod)
 
 ## Using in a project
 
-Add a committed `.vars.yaml` declaring the env vars the project needs:
+Multiple users can work on the same project despite each having a different store. 
+Add a committed `.vars.yaml` declaring the env vars the project uses:
 
 ```yaml
 # .vars.yaml
@@ -115,7 +118,11 @@ keys:
 exports: nothing is written to disk.
 
 ```sh
-eval "$(vars resolve)"            # bash/zsh
+# Loading to your shell
+eval "$(vars resolve)"
+./my-script
+
+# Passing as an ephemeral file
 docker run --env-file <(vars resolve --dotenv) my-image   # docker, no temp file
 ```
 
@@ -145,7 +152,18 @@ vars resolve                # "default" profile applied automatically
 vars resolve -p mainnet     # use the mainnet profile
 ```
 
-Inline values: `= value` always emits that literal; `?= value` uses the store
+### Scope fallback
+
+When resolving a key, vars tries the most specific store key first, then strips
+the deepest scope one level at a time:
+
+```
+main/dev/RPC_URL  →  main/RPC_URL  →  RPC_URL  →  not found
+```
+
+### Inline values
+
+`= value` always emits that literal; `?= value` uses the store
 value if present, else the default.
 
 ```yaml
@@ -155,23 +173,16 @@ profiles:
     RPC_URL: ?= http://localhost:8545  # store wins; falls back to localhost
 ```
 
-### Scope fallback
-
-When resolving a key, vars tries the most specific store key first, then strips
-the **deepest** scope one level at a time:
-
-```
-main/dev/RPC_URL  →  main/RPC_URL  →  RPC_URL  →  not found
-```
-
 ### Local overrides
 
-`.vars.local.yaml` (git-ignored) overrides `.vars.yaml` per-key per-profile:
+`.vars.local.yaml` (git-ignored) allows each user to override `.vars.yaml`:
 your local deviations from the team's convention.
 
-### Working with existing env vars / fallbacks
+### Incremental adoption
 
-Pipe a `.env` in: store values win for manifest keys, the dotenv fills the gaps,
+`vars resolve` can work with existing env variables and dotenv files, using them as a fallback.
+
+Pipe a `.env` in: the store values win for keys listed on the manifest, the dotenv fills the gaps,
 and non-manifest keys pass through. If a key is missing from both, the current
 shell env is the last fallback.
 
@@ -195,10 +206,10 @@ cat .env | vars resolve --partial --origin # annotate where each value came from
 When the store is a git repo, every change is committed automatically.
 
 ```sh
-vars history RPC_URL        # the change log for one key
+vars history RPC_URL        # the change log for a key
 vars get RPC_URL~1          # the previous value
 vars get RPC_URL~2          # two versions ago  (git's HEAD~N convention)
-vars git remote add origin git@github.com:me/secrets.git
+vars git remote add origin git@github.com:me/store.git
 vars git log                # run any git command in the store dir
 vars sync                   # pull --rebase, then push
 ```
@@ -212,23 +223,18 @@ After a change, vars reminds you to `vars sync` when a remote is configured.
 Curious what's under the hood? Three ideas:
 
 - **One file per secret.** Each value is an [age](https://age-encryption.org)-encrypted
-  file under your store directory; scopes are just subdirectories. That's what
-  makes the store diff cleanly and live in git.
+  file under your store directory; scopes are just subdirectories.
 - **Your SSH key is the lock.** The encryption key for each file is derived from
-  a deterministic signature by your Ed25519/RSA key, via `ssh-agent`. There's no
-  passphrase to invent and no daemon of ours to run: signing is the one thing
-  the agent already does. (ECDSA and FIDO/`sk-` keys sign non-deterministically,
-  so they can't be used.)
+  a deterministic signature by your Ed25519/RSA key, via `ssh-agent`.
+  (ECDSA and FIDO/`sk-` keys sign non-deterministically, so they can't be used.)
 - **git is the history and the sync.** The store is an ordinary git repo, so
-  `git log` is your history and `git push`/`pull` moves secrets between your
-  machines. git is optional: without it everything still works,
-  versioning is opt-in.
+  `git log` is your history and `git push`/`pull` syncs encrypted secrets between your
+  machines. git is optional: without it everything still works, versioning is opt-in.
 
 The same SSH key must be available on every machine that opens the store: git
-moves the encrypted files, and your key is what decrypts them. On first run vars
+moves the encrypted files, and your SSH key is what decrypts them. On first run vars
 picks the key in your agent (or asks, if there are several) and records its
-fingerprint in `store.json`. To force a specific key (CI, a non-standard path,
-or disambiguation):
+fingerprint in `store.json`. To force a specific key (a non-standard path or disambiguation):
 
 ```sh
 export VARS_SSH_KEY=~/.ssh/id_work
