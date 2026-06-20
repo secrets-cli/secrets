@@ -36,7 +36,7 @@ func newVault(t *testing.T, c Committer) *Vault {
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
-	signer, err := sshderive.FromFile(keyPath, nil)
+	signer, err := sshderive.FromFile(keyPath)
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}

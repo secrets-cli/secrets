@@ -119,9 +119,9 @@ func (r *Repo) Sync() error {
 }
 
 // Log returns commit lines (newest first) touching relpath, formatted
-// "<short-hash> <subject> (<date>)". Empty when relpath has no history.
+// "<short-hash> <subject> (<local date+time>)". Empty when relpath has no history.
 func (r *Repo) Log(relpath string) ([]string, error) {
-	out, err := r.run("log", "--format=%h %s (%cs)", "--", relpath)
+	out, err := r.run("log", "--date=format-local:%Y-%m-%d %H:%M", "--format=%h %s (%cd)", "--", relpath)
 	if err != nil {
 		return nil, fmt.Errorf("git log: %w: %s", err, out)
 	}

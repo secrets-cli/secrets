@@ -1,4 +1,4 @@
-// Package vault is the v3 store: one age-encrypted file per secret, scopes as
+// Package vault is the vars store: one age-encrypted file per secret, scopes as
 // directories, rooted at a single directory that is usually a git repo.
 //
 // It does encrypted file CRUD only. Versioning is delegated to an optional

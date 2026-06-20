@@ -184,7 +184,7 @@ func TestFromFile_RoundTripAndType(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 
-	s, err := FromFile(keyPath, nil)
+	s, err := FromFile(keyPath)
 	if err != nil {
 		t.Fatalf("FromFile: %v", err)
 	}
