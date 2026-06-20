@@ -409,13 +409,17 @@ func TestLog(t *testing.T) {
 		t.Skip("git history unavailable in this environment")
 	}
 	has(t, so, "set RPC_URL")
-	// Each line carries a local date+time: "<hash> <subject> (YYYY-MM-DD HH:MM)".
-	if !regexp.MustCompile(`\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}\)`).MatchString(so) {
-		t.Fatalf("log line should show local date+time, got:\n%s", so)
+	// Lines are "~N  YYYY-MM-DD HH:MM  <subject>": ~0 = current, ~1 = previous,
+	// the same N you pass to `vars get RPC_URL~N`.
+	if !regexp.MustCompile(`(?m)^~0  \d{4}-\d{2}-\d{2} \d{2}:\d{2}  set RPC_URL$`).MatchString(so) {
+		t.Fatalf("log line should be '~0  <local date+time>  <subject>', got:\n%s", so)
+	}
+	if !strings.Contains(so, "~1  ") {
+		t.Fatalf("expected a ~1 entry for the previous version, got:\n%s", so)
 	}
 }
 
-func TestLogRemovedKeyStillShown(t *testing.T) {
+func TestLogAndGetRemovalIsANoValueState(t *testing.T) {
 	r := newRunner(t)
 	r.mustRun("set", "GONE", "v1")
 	r.mustRun("set", "--replace", "GONE", "v2")
@@ -424,9 +428,49 @@ func TestLogRemovedKeyStillShown(t *testing.T) {
 	if err != nil || strings.TrimSpace(so) == "" {
 		t.Skip("git history unavailable in this environment")
 	}
-	// A removed key keeps its history: the rm and the two sets are all visible.
-	has(t, so, "rm GONE")
-	has(t, so, "set GONE")
+	// The removal is a committed state: it occupies ~0 and renders as "(removed)",
+	// not as the "rm GONE" action. The stored values follow at ~1, ~2.
+	if !regexp.MustCompile(`(?m)^~0  \d{4}-\d{2}-\d{2} \d{2}:\d{2}  \(removed\)$`).MatchString(so) {
+		t.Fatalf("~0 should be a (removed) state line, got:\n%s", so)
+	}
+	if strings.Contains(so, "rm GONE") {
+		t.Fatalf("the rm action label should not appear, only the (removed) state:\n%s", so)
+	}
+	has(t, so, "~1  ")
+	// get at the removal state (~0) has no value: non-zero exit, nothing on stdout.
+	out, se := r.mustFail("get", "GONE~0")
+	if out != "" {
+		t.Fatalf("a no-value version must print nothing to stdout, got %q", out)
+	}
+	has(t, se, "no value")
+	// The last stored value is at ~1.
+	if got := r.mustRun("get", "GONE~1"); got != "v2" {
+		t.Fatalf("GONE~1 = %q, want last stored value v2", got)
+	}
+}
+
+func TestGetMidHistoryRemoval(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "K", "v1")
+	r.mustRun("set", "--replace", "K", "v2")
+	r.mustRun("rm", "--force", "K")
+	r.mustRun("set", "K", "v3") // re-added; history newest-first: [v3, rm, v2, v1]
+	if _, _, err := r.run("log", "K"); err != nil {
+		t.Skip("git history unavailable in this environment")
+	}
+	if got := r.mustRun("get", "K~0"); got != "v3" {
+		t.Fatalf("K~0 = %q, want v3", got)
+	}
+	out, _ := r.mustFail("get", "K~1") // the removal in the middle
+	if out != "" {
+		t.Fatalf("K~1 (a removal state) must print nothing, got %q", out)
+	}
+	if got := r.mustRun("get", "K~2"); got != "v2" {
+		t.Fatalf("K~2 = %q, want v2", got)
+	}
+	if got := r.mustRun("get", "K~3"); got != "v1" {
+		t.Fatalf("K~3 = %q, want v1", got)
+	}
 }
 
 func TestLogNoHistory(t *testing.T) {

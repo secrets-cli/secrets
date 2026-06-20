@@ -17,9 +17,10 @@ func init() {
 var logCmd = &cobra.Command{
 	Use:   "log <key>",
 	Short: "Show a key's change history (newest first)",
-	Long: `List the git commits that touched a key, newest first, with local time.
-Removed keys still show their history (git keeps it). Like ` + "`git log <path>`" + `.
-Requires the store to be a git repo.`,
+	Long: `List a key's committed states, newest first, with local time. Each line is
+tagged with the ~N you pass to ` + "`vars get <key>~N`" + ` (~0 = latest state, ~1 = before).
+A commit that removed the key shows as "(removed)", a state with no value; every
+other line is a stored value. Requires the store to be a git repo.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Reads git metadata only (no decryption), so it needs neither the SSH key
@@ -39,8 +40,10 @@ Requires the store to be a git repo.`,
 			fmt.Fprintf(os.Stderr, "No history for %q.\n", args[0])
 			return nil
 		}
-		for _, l := range lines {
-			fmt.Fprintln(os.Stdout, l)
+		// Tag each line with the ~N that retrieves it (`vars get <key>~N`): the
+		// list is newest-first, so its index is exactly that N.
+		for i, l := range lines {
+			fmt.Fprintf(os.Stdout, "~%d  %s\n", i, l)
 		}
 		return nil
 	},

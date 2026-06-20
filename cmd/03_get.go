@@ -18,8 +18,11 @@ var getCmd = &cobra.Command{
 	Short: "Get a key from the store",
 	Long: `Print one value to stdout with no trailing newline. Pipes cleanly.
 
-KEY~N retrieves the value N versions ago from git history (like git's HEAD~N):
-KEY~1 is the previous value, KEY~2 the one before that.`,
+KEY~N is this key's state N commits back in its own history (not a global commit):
+KEY~0 = latest committed state, KEY~1 the one before, and so on. The ~N matches the
+tags shown by ` + "`vars log <key>`" + `. If that state was a removal, it has no value:
+nothing is printed and the command exits non-zero (a removed key's last value is
+then KEY~1). The ~ borrows git's syntax, but counts only commits to this key.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		v, err := openVault()
