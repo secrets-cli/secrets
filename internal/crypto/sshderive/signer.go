@@ -149,21 +149,21 @@ func fromAgentKey(ag agent.Agent, pub ssh.PublicKey) *Signer {
 	return &Signer{signRaw: signRaw, pub: pub, fingerprint: ssh.FingerprintSHA256(pub)}
 }
 
-// FromFile loads a private key file. passphrase may be nil for an unencrypted
-// key; an encrypted key with no/wrong passphrase returns an error (callers
-// detect *ssh.PassphraseMissingError to prompt).
-func FromFile(path string, passphrase []byte) (*Signer, error) {
+// FromFile loads an unencrypted private key file. Passphrase-protected keys are
+// not read directly: load them into ssh-agent (vars signs through the agent),
+// which is the supported path. A passphrase-protected file yields a clear error
+// pointing there.
+func FromFile(path string) (*Signer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading SSH key %s: %w", path, err)
 	}
-	var ss ssh.Signer
-	if len(passphrase) > 0 {
-		ss, err = ssh.ParsePrivateKeyWithPassphrase(data, passphrase)
-	} else {
-		ss, err = ssh.ParsePrivateKey(data)
-	}
+	ss, err := ssh.ParsePrivateKey(data)
 	if err != nil {
+		var pm *ssh.PassphraseMissingError
+		if errors.As(err, &pm) {
+			return nil, fmt.Errorf("SSH key %s is passphrase-protected; load it with `ssh-add` (vars signs through ssh-agent)", path)
+		}
 		return nil, err
 	}
 	return fromSSHSigner(ss)

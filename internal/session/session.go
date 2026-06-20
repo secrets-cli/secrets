@@ -72,7 +72,7 @@ func ResolveSigner(dir string) (*sshderive.Signer, error) {
 // ssh-agent, then the default key file.
 func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 	if path := os.Getenv("VARS_SSH_KEY"); path != "" {
-		s, err := sshderive.FromFile(path, nil)
+		s, err := sshderive.FromFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("VARS_SSH_KEY %s: %w", path, err)
 		}
@@ -90,7 +90,7 @@ func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 		conn.Close() // agent lacks the key — release before trying the key file
 	}
 	if path := defaultKeyPath(); path != "" {
-		if s, err := sshderive.FromFile(path, nil); err == nil && (fp == "" || s.Fingerprint() == fp) {
+		if s, err := sshderive.FromFile(path); err == nil && (fp == "" || s.Fingerprint() == fp) {
 			return s, nil
 		}
 	}
@@ -102,7 +102,7 @@ func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 // the default key file. Callers pick one (auto when there is exactly one).
 func UsableInitSigners() ([]*sshderive.Signer, error) {
 	if path := os.Getenv("VARS_SSH_KEY"); path != "" {
-		s, err := sshderive.FromFile(path, nil)
+		s, err := sshderive.FromFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("VARS_SSH_KEY %s: %w", path, err)
 		}
@@ -116,7 +116,7 @@ func UsableInitSigners() ([]*sshderive.Signer, error) {
 		conn.Close()
 	}
 	if path := defaultKeyPath(); path != "" {
-		if s, err := sshderive.FromFile(path, nil); err == nil {
+		if s, err := sshderive.FromFile(path); err == nil {
 			return []*sshderive.Signer{s}, nil
 		}
 	}

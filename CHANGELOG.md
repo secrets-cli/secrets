@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0]
+
+### Changed
+- `vars history <key>` renamed to `vars log <key>`. It now also shows local date+time, works for removed keys (git keeps their history), and needs no SSH key (reads git metadata only).
+- The `[n]ew name` conflict option in `set`/`import` asks for a full key (scopes allowed, e.g. `prod/K`) instead of appending a `_<suffix>`.
+
 ## [0.6.0] (unreleased)
 
 Complete re-architecture: from a single scrypt-encrypted blob + gRPC agent to a
@@ -14,17 +20,29 @@ migration.** Export from the old binary and import into the new one (see README)
 - Per-file `age` store: one encrypted `.age` file per secret, scopes as directories, rooted at a git repo.
 - SSH-derived encryption (`ssh-v1` scheme): each file's key comes from a deterministic `SSHSIG` signature (namespace `vars.store.v1`) by your Ed25519/RSA key, via `ssh-agent` or the key file (no passphrase, no daemon).
 - `vars get KEY~N`: retrieve the value N versions ago from git history.
-- `vars history <key>`: the git commit log for one key.
+- `vars history <key>`: a key's change history (newest first).
 - `vars sync`: `pull --rebase` then push. `vars git <args>`: passthrough to git in the store dir.
 - In-tree break-glass `README.md` documenting manual decryption with `ssh-keygen`; a default-deny `.gitignore`.
 - `VARS_SSH_KEY` to pin a specific key; first-run key selection from `ssh-agent`.
-- `vars set KEY -` reads the value from stdin verbatim (the way to store a multi-line secret such as a PEM); a non-interactive `set` with no value now errors instead of silently truncating to one line.
+- `vars set KEY -` reads the value from stdin verbatim, the way to store a multi-line secret such as a PEM; a non-interactive `set` with no value now errors instead of silently truncating to one line.
+- The store ships a `.gitattributes` marking `*.age` binary, so git never text-merges ciphertext or rewrites its line endings.
+- First run reports what was actually set up (no false "versioned with git" when git is absent), and when git is active it nudges `vars git remote add origin <url>` for an encrypted off-machine backup.
 
 ### Changed
 - Encryption is now per-file age wrapped by an SSH-derived key (was age/scrypt of one blob).
 - History and sync are git-native (`git log` = history, `git push`/`pull` = sync); git is a soft dependency.
 - The store lives at `~/.local/share/vars/store/` (override with `VARS_STORE_DIR`); descriptor is `store.json`.
-- `resolve` emits only valid shell variable names (it rejects such manifest names and skips piped `.env` ones), so its `eval`-able output can't be a shell-injection vector; `--dotenv` errors on a value containing a newline rather than emitting a broken line.
+- `resolve` emits only valid shell variable names: it rejects unsafe manifest names and skips unsafe names piped from a `.env`, so the `eval`-able output can't be a shell-injection vector.
+- `--dotenv` output (both `resolve` and `dump`) refuses a value containing a newline instead of emitting a broken `KEY=value` line.
+- `dump` skips a file it cannot decrypt (warning + non-zero exit) instead of aborting on the first, so recovery returns everything readable.
+- Conflict prompts in `set`/`import` mask secret values (a short preview, not the full secret).
+- `vars sync` commits pending changes first and, on a conflicting rebase, aborts cleanly with guidance instead of leaving the repo mid-rebase.
+- `vars git` mirrors git's real exit code instead of flattening it to 1.
+- `import` parses large single-line values (was capped at 64 KB); `rm K K` de-duplicates; `mv K K` is rejected.
+
+### Fixed
+- `vars history`, `vars get KEY~N`, and the sync hint silently returned nothing due to a buffer-read-before-exec bug in the git runner.
+- A passphrase-protected key file now returns a clear `ssh-add` hint instead of a raw parse error.
 
 ### Removed
 - The gRPC agent (`vars agent`), the scrypt single-blob store, the passphrase machinery (`vars passwd`, passphrase re-checks, `VARS_AGENT_TTL`/`SOCK`), and the protobuf/grpc dependencies.

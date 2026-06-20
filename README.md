@@ -206,7 +206,7 @@ cat .env | vars resolve --partial --origin # annotate where each value came from
 When the store is a git repo, every change is committed automatically.
 
 ```sh
-vars history RPC_URL        # the change log for a key
+vars log RPC_URL            # this key's change log (newest first, local time)
 vars get RPC_URL~1          # the previous value
 vars get RPC_URL~2          # two versions ago  (git's HEAD~N convention)
 vars git remote add origin git@github.com:me/store.git
@@ -272,7 +272,7 @@ vars ls [scope]               # list keys as a tree (optionally a subtree)
 vars scope ls                 # list scope prefixes
 vars mv <old> <new>           # rename a key (-f to skip the prompt)
 vars rm <key>...              # delete keys (-f to skip the prompt)
-vars history <key>            # change history for a key
+vars log <key>                # a key's change history (newest first)
 vars import [scope] <file>    # import key=value pairs from a .env file
 vars dump                     # print all keys and values
 vars init                     # scaffold .vars.yaml in the current directory

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -397,17 +398,56 @@ func TestDump(t *testing.T) {
 	has(t, out, "prod/B=2")
 }
 
-// --- history (git-backed; skipped where git isn't functional) ---
+// --- log (git-backed; skipped where git isn't functional) ---
 
-func TestHistory(t *testing.T) {
+func TestLog(t *testing.T) {
 	r := newRunner(t)
 	r.mustRun("set", "RPC_URL", "v1")
 	r.mustRun("set", "--replace", "RPC_URL", "v2")
-	so, _, err := r.run("history", "RPC_URL")
+	so, _, err := r.run("log", "RPC_URL")
 	if err != nil || strings.TrimSpace(so) == "" {
 		t.Skip("git history unavailable in this environment")
 	}
-	has(t, so, "RPC_URL")
+	has(t, so, "set RPC_URL")
+	// Each line carries a local date+time: "<hash> <subject> (YYYY-MM-DD HH:MM)".
+	if !regexp.MustCompile(`\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}\)`).MatchString(so) {
+		t.Fatalf("log line should show local date+time, got:\n%s", so)
+	}
+}
+
+func TestLogRemovedKeyStillShown(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "GONE", "v1")
+	r.mustRun("set", "--replace", "GONE", "v2")
+	r.mustRun("rm", "--force", "GONE")
+	so, _, err := r.run("log", "GONE")
+	if err != nil || strings.TrimSpace(so) == "" {
+		t.Skip("git history unavailable in this environment")
+	}
+	// A removed key keeps its history: the rm and the two sets are all visible.
+	has(t, so, "rm GONE")
+	has(t, so, "set GONE")
+}
+
+func TestLogNoHistory(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "SEED", "x") // create the store/repo
+	if !isGitRepo(r) {
+		t.Skip("git history unavailable in this environment")
+	}
+	so, se, err := r.run("log", "NEVER_EXISTED")
+	if err != nil {
+		t.Fatalf("log of an unknown key should not error: %v\n%s", err, se)
+	}
+	if strings.TrimSpace(so) != "" {
+		t.Fatalf("expected no history output, got:\n%s", so)
+	}
+	has(t, se, "No history")
+}
+
+func isGitRepo(r *runner) bool {
+	_, statErr := os.Stat(filepath.Join(r.storeDir, ".git"))
+	return statErr == nil
 }
 
 func TestSetRejectsTilde(t *testing.T) {

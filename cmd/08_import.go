@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -107,29 +106,19 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 				}
 
 				fmt.Fprintf(os.Stderr, "\n%s already exists.\n  current:  %s\n  imported: %s\n", key, preview(string(existing)), preview(value))
-				choice, err := stdinPrompter().Line("[r]eplace  [n]ew name  [s]kip > ")
+				action, newKey, err := resolveConflict(stdinPrompter())
 				if err != nil {
 					return UserError(err.Error())
 				}
-				switch c := strings.ToLower(strings.TrimSpace(choice)); {
-				case strings.HasPrefix(c, "r"):
+				switch action {
+				case actionReplace:
 					pending = append(pending, vault.Item{Key: key, Value: []byte(value)})
 					replaced++
 					continue entryLoop
-				case strings.HasPrefix(c, "n"):
-					sfx, err := stdinPrompter().Line(fmt.Sprintf("Suffix (saved as %s_<suffix>): ", key))
-					if err != nil {
-						return UserError(err.Error())
-					}
-					sfx = strings.TrimSpace(strings.TrimPrefix(sfx, "_"))
-					if sfx == "" {
-						fmt.Fprintln(os.Stderr, "Suffix cannot be empty, skipping.")
-						skipped++
-						continue entryLoop
-					}
-					key = key + "_" + sfx
-					// re-check the renamed key for conflicts
-				default: // "s" or unrecognised
+				case actionRename:
+					key = newKey
+					// the new key may also exist: re-check it for conflicts
+				default: // actionSkip
 					fmt.Fprintf(os.Stderr, "Skipped %s\n", key)
 					skipped++
 					continue entryLoop

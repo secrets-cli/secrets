@@ -1,9 +1,42 @@
 package cmd
 
 import (
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/vars-cli/vars/internal/prompt"
 )
+
+func TestResolveConflict(t *testing.T) {
+	cases := []struct {
+		name       string
+		input      string // what the user "types" (newline-terminated answers)
+		wantAction conflictAction
+		wantKey    string
+	}{
+		{"replace short", "r\n", actionReplace, ""},
+		{"replace word", "Replace\n", actionReplace, ""},
+		{"skip explicit", "s\n", actionSkip, ""},
+		{"skip on unrecognized", "huh?\n", actionSkip, ""},
+		{"skip on empty", "\n", actionSkip, ""},
+		{"rename to free key", "n\ndev/K\n", actionRename, "dev/K"},
+		{"rename trims spaces", "n\n  prod/K  \n", actionRename, "prod/K"},
+		{"rename then empty name is a skip", "n\n\n", actionSkip, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := prompt.New(strings.NewReader(tc.input), io.Discard)
+			action, key, err := resolveConflict(p)
+			if err != nil {
+				t.Fatalf("resolveConflict: %v", err)
+			}
+			if action != tc.wantAction || key != tc.wantKey {
+				t.Fatalf("got (%d, %q), want (%d, %q)", action, key, tc.wantAction, tc.wantKey)
+			}
+		})
+	}
+}
 
 func TestPreview(t *testing.T) {
 	long := preview("0xdeadbeefcafebabe") // 18 chars
