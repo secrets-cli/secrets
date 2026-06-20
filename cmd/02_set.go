@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -91,26 +90,17 @@ shell history).
 			}
 
 			fmt.Fprintf(os.Stderr, "\n%s already exists (current: %s). New value will replace it.\n", key, preview(string(existing)))
-			choice, err := stdinPrompter().Line("[r]eplace  [n]ew name  [s]kip > ")
+			action, newKey, err := resolveConflict(stdinPrompter())
 			if err != nil {
 				return UserError(err.Error())
 			}
-			switch c := strings.ToLower(strings.TrimSpace(choice)); {
-			case strings.HasPrefix(c, "r"):
+			switch action {
+			case actionReplace:
 				// proceed to set below
-			case strings.HasPrefix(c, "n"):
-				sfx, err := stdinPrompter().Line(fmt.Sprintf("Suffix (saved as %s_<suffix>): ", key))
-				if err != nil {
-					return UserError(err.Error())
-				}
-				sfx = strings.TrimSpace(strings.TrimPrefix(sfx, "_"))
-				if sfx == "" {
-					fmt.Fprintln(os.Stderr, "Suffix cannot be empty, skipping.")
-					return nil
-				}
-				key = key + "_" + sfx
-				continue // renamed key may be new — re-check
-			default: // "s" or unrecognised
+			case actionRename:
+				key = newKey
+				continue // the new key may also exist (or be invalid): re-check it
+			default: // actionSkip
 				fmt.Fprintln(os.Stderr, "Skipped.")
 				return nil
 			}

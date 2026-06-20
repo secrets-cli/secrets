@@ -54,6 +54,42 @@ func preview(s string) string {
 	return fmt.Sprintf("%s… (%d chars)", string(r[:n]), len(r))
 }
 
+// conflictAction is how the user chose to resolve an existing-key conflict.
+type conflictAction int
+
+const (
+	actionSkip    conflictAction = iota // leave the stored value untouched
+	actionReplace                       // overwrite with the new value
+	actionRename                        // write under a different key (returned alongside)
+)
+
+// resolveConflict runs the interactive "key already exists" prompt and returns
+// the chosen action. For actionRename it also returns the new key, which may
+// itself already exist, so callers re-check. The caller prints the conflict
+// banner before calling and acts on the result after; this only owns the choice,
+// so it is testable with a Prompter over any reader. An empty or unrecognized
+// answer is a safe skip.
+func resolveConflict(p *prompt.Prompter) (conflictAction, string, error) {
+	choice, err := p.Line("[r]eplace  [n]ew name  [s]kip > ")
+	if err != nil {
+		return actionSkip, "", err
+	}
+	switch c := strings.ToLower(strings.TrimSpace(choice)); {
+	case strings.HasPrefix(c, "r"):
+		return actionReplace, "", nil
+	case strings.HasPrefix(c, "n"):
+		newKey, err := p.Line("New key name (scopes allowed, e.g. prod/K): ")
+		if err != nil {
+			return actionSkip, "", err
+		}
+		if newKey = strings.TrimSpace(newKey); newKey != "" {
+			return actionRename, newKey, nil
+		}
+		// empty name: fall through to skip
+	}
+	return actionSkip, "", nil
+}
+
 // uniqueStrings returns items with duplicates removed, preserving first-seen order.
 func uniqueStrings(items []string) []string {
 	seen := make(map[string]bool, len(items))
