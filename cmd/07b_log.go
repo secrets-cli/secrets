@@ -37,7 +37,7 @@ other line is a stored value. Requires the store to be a git repo.`,
 			return InternalError(err.Error())
 		}
 		if len(lines) == 0 {
-			fmt.Fprintf(os.Stderr, "No history for %q.\n", args[0])
+			fmt.Fprintf(os.Stderr, "No history for %q\n", args[0])
 			return nil
 		}
 		// Tag each line with the ~N that retrieves it (`vars get <key>~N`): the

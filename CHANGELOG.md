@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `vars history <key>` renamed to `vars log <key>`. It lists the key's committed states, each tagged with the `~N` you pass to `vars get <key>~N` (`~0` = latest, `~1` = before) instead of a commit hash, with local date+time. A commit that removed the key shows as `(removed)` (a state with no value); it needs no SSH key (reads git metadata only).
 - `vars get <key>~N` is the key's state `N` commits back in its own history, not global git history (it always was per-key; the docs wrongly implied git's `HEAD~N`). If state `N` was a removal it has no value: nothing is printed and the command exits non-zero (a removed key's last value is then `~1`).
 - The `[n]ew name` conflict option in `set`/`import` asks for a full key (scopes allowed, e.g. `prod/K`) instead of appending a `_<suffix>`.
+- Key-free commands (`ls`, `scope`, `mv`, `rm`) no longer require the SSH key; it's resolved lazily, only when a command actually encrypts or decrypts.
 
 ## [0.6.0] (unreleased)
 

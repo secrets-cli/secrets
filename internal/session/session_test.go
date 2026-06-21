@@ -34,15 +34,10 @@ func writeKey(t *testing.T) (path, fingerprint string) {
 	return path, ssh.FingerprintSHA256(ss.PublicKey())
 }
 
-func TestResolveSigner_ViaEnvKey(t *testing.T) {
+func TestSignerForFingerprint_ViaEnvKey(t *testing.T) {
 	keyPath, fp := writeKey(t)
-	dir := t.TempDir()
-	if err := vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: fp}); err != nil {
-		t.Fatalf("init: %v", err)
-	}
 	t.Setenv("VARS_SSH_KEY", keyPath)
-
-	s, err := ResolveSigner(dir)
+	s, err := signerForFingerprint(fp)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -51,25 +46,60 @@ func TestResolveSigner_ViaEnvKey(t *testing.T) {
 	}
 }
 
-func TestResolveSigner_FingerprintMismatch(t *testing.T) {
-	_, fpA := writeKey(t)  // the store's key
-	keyB, _ := writeKey(t) // a different key
-	dir := t.TempDir()
-	vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: fpA})
-	t.Setenv("VARS_SSH_KEY", keyB)
-
-	if _, err := ResolveSigner(dir); err == nil {
-		t.Fatal("expected a fingerprint-mismatch error")
-	}
-}
-
-func TestResolveSigner_UnsupportedScheme(t *testing.T) {
+func TestOpen_UnsupportedScheme(t *testing.T) {
 	keyPath, fp := writeKey(t)
 	dir := t.TempDir()
 	vault.Init(dir, vault.Meta{Scheme: "ssh-v999", KeyFingerprint: fp})
 	t.Setenv("VARS_SSH_KEY", keyPath)
-	if _, err := ResolveSigner(dir); err == nil {
-		t.Fatal("expected unsupported-scheme error")
+	if _, err := Open(dir); err == nil {
+		t.Fatal("Open should reject an unsupported scheme (no key needed for this check)")
+	}
+}
+
+// Open resolves the key lazily: metadata operations work without it; only
+// encrypt/decrypt require it. Guards against the regression where `vars ls`
+// demanded ssh-add despite decrypting nothing.
+func TestOpen_LazyKey(t *testing.T) {
+	keyPath, fp := writeKey(t)
+	dir := t.TempDir()
+	vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: fp})
+
+	t.Setenv("VARS_SSH_KEY", keyPath)
+	v, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := v.Set("K", []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	// Reopen with no usable key.
+	t.Setenv("VARS_SSH_KEY", filepath.Join(t.TempDir(), "absent"))
+	v2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open must not require the key: %v", err)
+	}
+	if keys, err := v2.List(); err != nil || len(keys) != 1 {
+		t.Fatalf("List should work without the key: keys=%v err=%v", keys, err)
+	}
+	if _, err := v2.Get("K"); err == nil {
+		t.Fatal("Get should fail when no usable key is available")
+	}
+}
+
+func TestOpen_FingerprintMismatchSurfacesOnUse(t *testing.T) {
+	_, fpA := writeKey(t)  // the store's key
+	keyB, _ := writeKey(t) // a different, valid key
+	dir := t.TempDir()
+	vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: fpA})
+	t.Setenv("VARS_SSH_KEY", keyB)
+
+	v, err := Open(dir) // lazy: Open succeeds even though the key won't match
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := v.Set("K", []byte("v")); err == nil {
+		t.Fatal("Set should fail: the available key does not match the store fingerprint")
 	}
 }
 

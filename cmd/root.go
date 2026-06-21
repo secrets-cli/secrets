@@ -19,10 +19,10 @@ var Version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "vars",
-	Short: "A central vault for environment variables",
-	Long: `vars is a single encrypted store for environment variables,
-shared across multiple projects. It replaces scattered .env files with
-a single age-encrypted store.`,
+	Short: "An encrypted store for your environment variables",
+	Long: `vars keeps your project secrets in one encrypted store, unlocked by the
+SSH key you already have. Each value is a separate age-encrypted file in an optional
+git repo, so history and cross-machine sync are just git.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {

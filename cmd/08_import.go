@@ -54,7 +54,7 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 			return UserError(fmt.Sprintf("parsing file: %v", err))
 		}
 		if len(entries) == 0 {
-			fmt.Fprintln(os.Stderr, "No entries found.")
+			fmt.Fprintln(os.Stderr, "No entries found")
 			return nil
 		}
 		if scope != "" {
@@ -133,7 +133,7 @@ With a scope, keys are prefixed: vars import prod .env → prod/KEY.`,
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "Imported %d, replaced %d, skipped %d.\n", imported, replaced, skipped)
+		fmt.Fprintf(os.Stderr, "Imported %d, replaced %d, skipped %d\n", imported, replaced, skipped)
 		hintSync(storeDir())
 		return nil
 	},

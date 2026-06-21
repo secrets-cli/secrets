@@ -389,6 +389,35 @@ func TestRm(t *testing.T) {
 	r.mustFail("rm", "GHOST", "--force")
 }
 
+// Success feedback: a first write is silent; updates/removes name the key; mv uses an arrow.
+func TestMutationFeedback(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "SEED", "x") // first command: absorbs the one-time store-creation output
+
+	// New key in an existing store: nothing on stderr.
+	if _, se, err := r.run("set", "NEW", "v1"); err != nil || strings.TrimSpace(se) != "" {
+		t.Fatalf("a first write should be silent; err=%v stderr=%q", err, se)
+	}
+	// Update names the key.
+	if _, se, _ := r.run("set", "NEW", "v2", "--replace"); !strings.Contains(se, "NEW updated") {
+		t.Fatalf("update should say 'NEW updated', got %q", se)
+	}
+	// Remove (single) names the key; (multiple) gives a count.
+	r.mustRun("set", "A", "1")
+	r.mustRun("set", "B", "2")
+	if _, se, _ := r.run("rm", "NEW", "--force"); !strings.Contains(se, "NEW removed") {
+		t.Fatalf("rm should say 'NEW removed', got %q", se)
+	}
+	if _, se, _ := r.run("rm", "A", "B", "--force"); !strings.Contains(se, "2 keys removed") {
+		t.Fatalf("multi-rm should say '2 keys removed', got %q", se)
+	}
+	// Rename uses the arrow.
+	r.mustRun("set", "OLD", "v")
+	if _, se, _ := r.run("mv", "OLD", "NEWNAME", "--force"); !strings.Contains(se, "Renamed: OLD → NEWNAME") {
+		t.Fatalf("mv should say 'Renamed: OLD → NEWNAME', got %q", se)
+	}
+}
+
 func TestDump(t *testing.T) {
 	r := newRunner(t)
 	r.mustRun("set", "A", "1")
