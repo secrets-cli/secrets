@@ -36,7 +36,7 @@ var mvCmd = &cobra.Command{
 				return UserError(err.Error())
 			}
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-				fmt.Fprintln(os.Stderr, "Aborted.")
+				fmt.Fprintln(os.Stderr, "Aborted")
 				return nil
 			}
 		}
@@ -45,7 +45,7 @@ var mvCmd = &cobra.Command{
 			return UserError(err.Error())
 		}
 
-		fmt.Fprintf(os.Stderr, "Renamed %s → %s\n", args[0], args[1])
+		fmt.Fprintf(os.Stderr, "Renamed: %s → %s\n", args[0], args[1])
 		hintSync(storeDir())
 		return nil
 	},

@@ -55,7 +55,7 @@ var syncCmd = &cobra.Command{
 		if err := git.New(dir).Sync(); err != nil {
 			return UserError(err.Error())
 		}
-		fmt.Fprintln(os.Stderr, "Synced.")
+		fmt.Fprintln(os.Stderr, "Synced")
 		return nil
 	},
 }

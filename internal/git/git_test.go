@@ -49,7 +49,7 @@ func (f *fakeGit) run(args ...string) (string, error) {
 		return f.remotes, nil
 	case cmd == "config user.email":
 		return f.configEmail, nil
-	case strings.HasPrefix(cmd, "log --format=%H"):
+	case strings.Contains(cmd, "--format=%H"):
 		return f.logOutput, nil
 	case strings.HasPrefix(cmd, "show "):
 		return f.showOutput, nil
@@ -213,6 +213,16 @@ func TestVersionContent_OutOfBounds(t *testing.T) {
 	}
 }
 
+func TestVersionContent_RemovalHasNoValue(t *testing.T) {
+	// commits[0] is the commit that removed the key: cat-file -e fails, so the
+	// version reports "no value" rather than leaking a raw git show failure.
+	f := &fakeGit{logOutput: "h0\nh1\n", failOn: "cat-file"}
+	_, err := repoWith(f).VersionContent("K.age", 0)
+	if err == nil || !strings.Contains(err.Error(), "no value") {
+		t.Fatalf("expected a clear no-value error, got %v", err)
+	}
+}
+
 func TestVersionContent_NoHistory(t *testing.T) {
 	f := &fakeGit{logOutput: ""}
 	if _, err := repoWith(f).VersionContent("K.age", 1); err == nil {
@@ -220,22 +230,46 @@ func TestVersionContent_NoHistory(t *testing.T) {
 	}
 }
 
-func TestLog_ParsesLines(t *testing.T) {
-	f := &fakeGit{}
-	// Override run to return canned log output.
+func TestLog_RendersValuesAndRemovals(t *testing.T) {
+	var calls []string
+	// Full history h0..h2 where h1 was a removal (absent from the AMR value set).
 	r := &Repo{dir: "/store", run: func(args ...string) (string, error) {
-		f.calls = append(f.calls, strings.Join(args, " "))
-		return "abc123 set RPC_URL (2026-06-13)\ndef456 mv RPC_URL R2 (2026-06-12)\n", nil
+		cmd := strings.Join(args, " ")
+		calls = append(calls, cmd)
+		switch {
+		case strings.Contains(cmd, "--diff-filter=AMR"):
+			return "h0\nh2\n", nil // value-bearing commits only
+		case strings.Contains(cmd, "--format=%H"):
+			return "h0\x1f2026-06-21 09:10\x1fset RPC_URL\n" +
+				"h1\x1f2026-06-21 09:05\x1frm RPC_URL\n" +
+				"h2\x1f2026-06-21 09:01\x1fset RPC_URL\n", nil
+		}
+		return "", nil
 	}}
 	lines, err := r.Log("RPC_URL.age")
 	if err != nil {
 		t.Fatalf("log: %v", err)
 	}
-	if len(lines) != 2 || !strings.Contains(lines[0], "set RPC_URL") {
-		t.Fatalf("log lines = %v", lines)
+	if len(lines) != 3 {
+		t.Fatalf("want 3 state lines, got %v", lines)
 	}
-	if !f.issued("-- RPC_URL.age") {
-		t.Fatalf("log should scope to the file, calls = %v", f.calls)
+	if !strings.Contains(lines[0], "set RPC_URL") {
+		t.Fatalf("line 0 should be a value: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "(removed)") || strings.Contains(lines[1], "rm RPC_URL") {
+		t.Fatalf("line 1 should render the removal as a no-value state, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "set RPC_URL") {
+		t.Fatalf("line 2 should be a value: %q", lines[2])
+	}
+	scoped := false
+	for _, c := range calls {
+		if strings.Contains(c, "-- RPC_URL.age") {
+			scoped = true
+		}
+	}
+	if !scoped {
+		t.Fatalf("log should scope to the file, calls = %v", calls)
 	}
 }
 

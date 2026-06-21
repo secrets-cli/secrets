@@ -75,11 +75,11 @@ shell history).
 				break // new key — no conflict
 			}
 			if string(existing) == value {
-				fmt.Fprintln(os.Stderr, "Already set, nothing to do.")
+				fmt.Fprintln(os.Stderr, "Already set")
 				return nil
 			}
 			if setSkip {
-				fmt.Fprintln(os.Stderr, "Skipped.")
+				fmt.Fprintln(os.Stderr, "Skipped")
 				return nil
 			}
 			if setReplace {
@@ -101,18 +101,23 @@ shell history).
 				key = newKey
 				continue // the new key may also exist (or be invalid): re-check it
 			default: // actionSkip
-				fmt.Fprintln(os.Stderr, "Skipped.")
+				fmt.Fprintln(os.Stderr, "Skipped")
 				return nil
 			}
 			break
 		}
 
+		// A first write is silent; an update names the key. Has is decrypt-free,
+		// so this holds even when the loop above couldn't read the old value.
+		existed := v.Has(key)
 		if err := v.Set(key, []byte(value)); err != nil {
 			return UserError(err.Error())
 		}
 
 		printManifestHint(key)
-		fmt.Fprintln(os.Stderr, "Saved.")
+		if existed {
+			fmt.Fprintf(os.Stderr, "%s updated\n", key)
+		}
 		hintSync(storeDir())
 		return nil
 	},

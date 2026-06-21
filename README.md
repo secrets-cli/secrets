@@ -206,9 +206,9 @@ cat .env | vars resolve --partial --origin # annotate where each value came from
 When the store is a git repo, every change is committed automatically.
 
 ```sh
-vars log RPC_URL            # this key's change log (newest first, local time)
-vars get RPC_URL~1          # the previous value
-vars get RPC_URL~2          # two versions ago  (git's HEAD~N convention)
+vars log RPC_URL            # this key's committed states, newest first, tagged ~0, ~1, …
+vars get RPC_URL~1          # the previous value of this key
+vars get RPC_URL~2          # two states back (counts only commits to this key)
 vars git remote add origin git@github.com:me/store.git
 vars git log                # run any git command in the store dir
 vars sync                   # pull --rebase, then push

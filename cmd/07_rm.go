@@ -38,7 +38,7 @@ var rmCmd = &cobra.Command{
 
 		if !rmForce {
 			if len(args) == 1 {
-				fmt.Fprintf(os.Stderr, "Removing %s.\n", args[0])
+				fmt.Fprintf(os.Stderr, "Removing %s\n", args[0])
 			} else {
 				fmt.Fprintf(os.Stderr, "Removing %d keys:\n", len(args))
 				for _, key := range args {
@@ -53,7 +53,7 @@ var rmCmd = &cobra.Command{
 				return UserError(err.Error())
 			}
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-				fmt.Fprintln(os.Stderr, "Aborted.")
+				fmt.Fprintln(os.Stderr, "Aborted")
 				return nil
 			}
 		}
@@ -69,9 +69,9 @@ var rmCmd = &cobra.Command{
 		}
 
 		if len(args) == 1 {
-			fmt.Fprintln(os.Stderr, "Removed.")
+			fmt.Fprintf(os.Stderr, "%s removed\n", args[0])
 		} else {
-			fmt.Fprintf(os.Stderr, "Removed %d keys.\n", len(args))
+			fmt.Fprintf(os.Stderr, "%d keys removed\n", len(args))
 		}
 		hintSync(storeDir())
 		return nil

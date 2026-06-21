@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
+	"github.com/vars-cli/vars/internal/crypto"
 	"github.com/vars-cli/vars/internal/crypto/sshderive"
 	"github.com/vars-cli/vars/internal/git"
 	"github.com/vars-cli/vars/internal/vault"
@@ -16,26 +18,77 @@ import (
 // Scheme is the only store scheme this build understands.
 const Scheme = "ssh-v1"
 
-// Open returns a ready vault for an existing store at dir, resolving the SSH
-// key it requires and attaching git versioning when dir is a repo.
+// Open returns a ready vault for an existing store at dir, attaching git
+// versioning when dir is a repo. The SSH key is resolved lazily (see
+// lazyBackend), so key-free commands (ls, scope, mv, rm) never require it; the
+// key is demanded only when a command actually encrypts or decrypts.
 func Open(dir string) (*vault.Vault, error) {
 	if !vault.Exists(dir) {
 		return nil, fmt.Errorf("no vars store at %s: run `vars` to create one", dir)
 	}
-	signer, err := ResolveSigner(dir)
+	meta, err := loadMeta(dir) // cheap, no key: validates the store is one we understand
 	if err != nil {
 		return nil, err
 	}
-	return vaultWith(dir, signer), nil
-}
-
-// vaultWith builds a vault, attaching a git Committer only when dir is a repo.
-func vaultWith(dir string, signer *sshderive.Signer) *vault.Vault {
 	var committer vault.Committer
 	if git.Available() && git.IsRepo(dir) {
 		committer = gitCommitter{git.New(dir)}
 	}
-	return vault.New(dir, sshderive.NewBackend(signer), committer)
+	return vault.New(dir, newLazyBackend(meta.KeyFingerprint), committer), nil
+}
+
+// loadMeta reads the store descriptor and verifies this build understands it.
+func loadMeta(dir string) (vault.Meta, error) {
+	meta, err := vault.ReadMeta(dir)
+	if err != nil {
+		return meta, fmt.Errorf("reading store metadata: %w", err)
+	}
+	if meta.Scheme != Scheme {
+		return meta, fmt.Errorf("unsupported store scheme %q (this vars supports %q)", meta.Scheme, Scheme)
+	}
+	return meta, nil
+}
+
+// lazyBackend defers SSH key resolution until the first encrypt/decrypt, so a
+// command that only reads or moves files (ls, scope, mv, rm) never touches the
+// key. The key (matched to the store's fingerprint) is resolved at most once.
+type lazyBackend struct {
+	fingerprint string
+	once        sync.Once
+	backend     crypto.Backend
+	err         error
+}
+
+var _ crypto.Backend = (*lazyBackend)(nil)
+
+func newLazyBackend(fingerprint string) *lazyBackend { return &lazyBackend{fingerprint: fingerprint} }
+
+func (l *lazyBackend) resolve() (crypto.Backend, error) {
+	l.once.Do(func() {
+		signer, err := signerForFingerprint(l.fingerprint)
+		if err != nil {
+			l.err = err
+			return
+		}
+		l.backend = sshderive.NewBackend(signer)
+	})
+	return l.backend, l.err
+}
+
+func (l *lazyBackend) Encrypt(plaintext []byte) ([]byte, error) {
+	b, err := l.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return b.Encrypt(plaintext)
+}
+
+func (l *lazyBackend) Decrypt(ciphertext []byte) ([]byte, error) {
+	b, err := l.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return b.Decrypt(ciphertext)
 }
 
 // gitCommitter adapts *git.Repo to vault.Committer. git is a soft dependency:
@@ -54,18 +107,6 @@ func (g gitCommitter) Commit(message string) error {
 // VersionContent satisfies vault.History, enabling `vars get KEY~N`.
 func (g gitCommitter) VersionContent(relpath string, n int) ([]byte, error) {
 	return g.repo.VersionContent(relpath, n)
-}
-
-// ResolveSigner finds the key an existing store needs, by its recorded fingerprint.
-func ResolveSigner(dir string) (*sshderive.Signer, error) {
-	meta, err := vault.ReadMeta(dir)
-	if err != nil {
-		return nil, fmt.Errorf("reading store metadata: %w", err)
-	}
-	if meta.Scheme != Scheme {
-		return nil, fmt.Errorf("unsupported store scheme %q (this vars supports %q)", meta.Scheme, Scheme)
-	}
-	return signerForFingerprint(meta.KeyFingerprint)
 }
 
 // signerForFingerprint resolves a signer matching fp: VARS_SSH_KEY file, then
