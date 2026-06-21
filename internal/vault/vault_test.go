@@ -62,6 +62,67 @@ func TestVault_SetGet(t *testing.T) {
 	}
 }
 
+// Each '/'-separated key segment is restricted to [A-Za-z0-9_-]: portable, no
+// Unicode-normalization collisions, no path traversal, no surprising characters.
+func TestValidateKey(t *testing.T) {
+	valid := []string{"RPC_URL", "prod/PRIVATE_KEY", "a/b/c", "API-KEY", "v2-key_3"}
+	for _, k := range valid {
+		if err := validateKey(k); err != nil {
+			t.Errorf("validateKey(%q) = %v, want nil", k, err)
+		}
+	}
+	invalid := []string{
+		"café",       // accented (non-ASCII)
+		"clé_privée", // accented
+		"API.KEY",    // dot
+		"a b",        // space
+		"a@b",        // punctuation
+		"a\tb",       // control character
+		"a\\b",       // backslash
+		"/leading",   // leading slash
+		"trailing/",  // trailing slash
+		"a//b",       // empty segment
+		"a/../b",     // relative segment (dot rejected)
+		"K~1",        // reserved version marker
+		"",           // empty
+	}
+	for _, k := range invalid {
+		if err := validateKey(k); err == nil {
+			t.Errorf("validateKey(%q) = nil, want an error", k)
+		}
+	}
+}
+
+// A write self-heals missing static scaffolding (e.g. a deleted .gitignore that
+// would otherwise leave the default-deny allowlist disarmed).
+func TestSet_HealsMissingScaffold(t *testing.T) {
+	v := newVault(t, nil)
+	// A fresh Init writes only store.json; the static files appear on first write.
+	if err := v.Set("K", []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for _, f := range []string{"README.md", ".gitignore", ".gitattributes"} {
+		if _, err := os.Stat(filepath.Join(v.dir, f)); err != nil {
+			t.Fatalf("write did not heal %s: %v", f, err)
+		}
+	}
+}
+
+// WriteScaffold restores only what's missing; it never clobbers a customized file.
+func TestWriteScaffold_PreservesExisting(t *testing.T) {
+	v := newVault(t, nil)
+	readme := filepath.Join(v.dir, "README.md")
+	if err := os.WriteFile(readme, []byte("custom"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteScaffold(v.dir); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if b, _ := os.ReadFile(readme); string(b) != "custom" {
+		t.Fatalf("clobbered a customized README: %q", b)
+	}
+}
+
 // A missing key must be distinguishable (errors.Is ErrNotFound) from a real
 // decrypt/IO failure, so resolve's scope fallback and import don't mask the latter.
 func TestVault_GetMissingIsErrNotFound(t *testing.T) {

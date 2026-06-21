@@ -83,6 +83,9 @@ vars dump                        # print everything (debugging / migration)
 The store lives at `~/.local/share/vars/store/` by default (override with
 `VARS_STORE_DIR`). It's just a directory of encrypted `.age` files with optional versioning.
 
+Key names use letters, digits, `_` and `-`, with `/` for scopes (e.g. `prod/DB_URL`).
+Other characters are rejected, so keys stay portable across machines and filesystems.
+
 ---
 
 ## Scopes
@@ -216,6 +219,22 @@ vars sync                   # pull --rebase, then push
 
 After a change, vars reminds you to `vars sync` when a remote is configured.
 
+### On a new machine
+
+Once your store has a remote, get it onto a new machine by **cloning the remote
+into your local store**, not by creating a fresh store (which would diverge):
+
+```sh
+vars clone git@github.com:me/store.git   # clones into ~/.local/share/vars/store
+vars get RPC_URL                         # ready, if that SSH key is loaded
+```
+
+`vars clone` sets `origin`, so `vars sync` works right away. If an empty local store exists,
+clone replaces it (it refuses only if the local store holds secrets).
+The key that authenticates the clone (your SSH key)
+may differ from the key the store is encrypted with; clone tells you to `ssh-add`
+the latter if it isn't loaded.
+
 ---
 
 ## How it works
@@ -255,7 +274,7 @@ export VARS_SSH_KEY=~/.ssh/id_work
 - **Only encrypted files are committed**
 - **Break-glass:** every store ships a `README.md` showing how to unlock with
   `ssh-keygen` plus the decryption details, so you're never locked into the `vars` binary.
-- **Permissions:** store dir `0700`, files `0600`; atomic writes.
+- **Permissions:** the store directory is `0700`, the access boundary.
 - **Quantum:** the file cipher is symmetric (safe). The SSH keypair is the
   Shor-vulnerable link, as in every mainstream tool today; rotate long-lived
   secrets and don't treat the store as an eternal archive.
@@ -268,7 +287,7 @@ export VARS_SSH_KEY=~/.ssh/id_work
 vars                          # first run: create the store
 vars set <key> [value]        # add/update a key (prompts if omitted; "vars set KEY -" reads stdin)
 vars get <key>                # print a value (KEY~N for N versions ago)
-vars ls [scope]               # list keys as a tree (optionally a subtree)
+vars ls [scope]               # list keys as a tree (optional arg must be a scope)
 vars scope ls                 # list scope prefixes
 vars mv <old> <new>           # rename a key (-f to skip the prompt)
 vars rm <key>...              # delete keys (-f to skip the prompt)
@@ -279,6 +298,7 @@ vars init                     # scaffold .vars.yaml in the current directory
 vars resolve [flags]          # resolve manifest keys as shell exports
 vars git <args>               # run git in the store directory
 vars sync                     # pull + push the store to its remote
+vars clone <remote>           # clone the store from a remote repo
 ```
 
 `resolve` flags: `-f/--file`, `-p/--profile`, `--dotenv`, `--fish`, `--partial`,

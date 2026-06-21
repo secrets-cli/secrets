@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/vars-cli/vars/internal/vault"
 )
 
 var (
@@ -72,7 +75,13 @@ shell history).
 		for {
 			existing, getErr := v.Get(key)
 			if getErr != nil {
-				break // new key — no conflict
+				if !errors.Is(getErr, vault.ErrNotFound) {
+					// The key exists but its current value can't be read (corrupt
+					// or foreign file, or the wrong key loaded). Don't silently
+					// overwrite it or treat --skip as "new" — surface it, as import does.
+					return UserError(getErr.Error())
+				}
+				break // truly new key — no conflict
 			}
 			if string(existing) == value {
 				fmt.Fprintln(os.Stderr, "Already set")

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0]
+
+### Added
+- `vars clone <remote>` clones an existing store from a git remote into your local store directory (e.g. to set up from a store you already pushed), instead of creating a fresh, divergent one. It replaces an empty local store but refuses to overwrite one that holds secrets, locks the store directory to `0700`, and reports whether the SSH key the store is encrypted to is available (that key may differ from the one that authenticated the clone). `git clone` sets `origin`, so `vars sync` works immediately.
+
+### Changed
+- Writing to a store self-heals its static scaffolding: a missing `README.md`, `.gitignore`, or `.gitattributes` is recreated on the next write (a deleted `.gitignore` re-arms the default-deny allowlist before secrets are committed). Existing files are never overwritten. The scaffold now has a single source of truth in the `vault` package, shared by store creation and writes.
+- `vars ls <arg>` accepts only a scope.
+- Concurrent mutations are serialized by an advisory file lock (`flock` on a gitignored `.vars.lock`), so two simultaneous writes no longer race the git index, and a rename can't clobber a concurrently created key. The lock auto-releases if the process dies; it's a no-op on platforms without `flock` (vars targets Unix).
+- Key names are restricted to `[A-Za-z0-9_-]` segments separated by `/`. This rejects accents and other non-ASCII (which collide across machines under Unicode normalization), control characters, and path-traversal, keeping keys portable and predictable.
+
+### Fixed
+- `vars set` treated an existing key whose value can't be decrypted (corrupt or foreign file, or the wrong key loaded) as a brand-new key: `--skip` would overwrite it and a plain `set` replaced it silently. It now surfaces the read failure instead, matching `vars import`.
+
 ## [0.7.0]
 
 ### Changed
@@ -12,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The `[n]ew name` conflict option in `set`/`import` asks for a full key (scopes allowed, e.g. `prod/K`) instead of appending a `_<suffix>`.
 - Key-free commands (`ls`, `scope`, `mv`, `rm`) no longer require the SSH key; it's resolved lazily, only when a command actually encrypts or decrypts.
 
-## [0.6.0] (unreleased)
+## [0.6.0]
 
 Complete re-architecture: from a single scrypt-encrypted blob + gRPC agent to a
 per-file, SSH-encrypted, git-tracked store. **Breaking: there is no in-place

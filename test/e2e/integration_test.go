@@ -697,3 +697,111 @@ func TestFirstRunBackupTip(t *testing.T) {
 	has(t, se, "versioned with git")         // message reflects that git is active
 	has(t, se, "vars git remote add origin") // one-time backup nudge
 }
+
+// seedSourceStore builds a store in a separate dir sharing r's key, with one
+// secret, and returns its path. Skips the test if git isn't functional (clone
+// needs a real repo).
+func seedSourceStore(t *testing.T, r *runner) string {
+	t.Helper()
+	src := t.TempDir()
+	env := append([]string{}, r.env...)
+	for i := range env {
+		if strings.HasPrefix(env[i], "VARS_STORE_DIR=") {
+			env[i] = "VARS_STORE_DIR=" + src
+		}
+	}
+	cmd := exec.Command(binary, "set", "RPC_URL", "https://rpc")
+	cmd.Dir, cmd.Env = r.workDir, env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("seed source store: %v\n%s", err, out)
+	}
+	if _, e := os.Stat(filepath.Join(src, ".git")); e != nil {
+		t.Skip("git unavailable in this environment; clone needs a real repo")
+	}
+	return src
+}
+
+func TestClone(t *testing.T) {
+	r := newRunner(t) // r.storeDir is the clone target (no store yet)
+	src := seedSourceStore(t, r)
+
+	_, se, err := r.run("clone", src)
+	if err != nil {
+		t.Fatalf("clone: %v\n%s", err, se)
+	}
+	has(t, se, "Cloned into")
+	// The clone is a usable store with the same key: secrets read back.
+	if got := r.mustRun("get", "RPC_URL"); got != "https://rpc" {
+		t.Fatalf("get after clone = %q", got)
+	}
+	// origin is set (so `vars sync` works); a store with secrets refuses re-clone.
+	if out := r.mustRun("git", "remote"); !strings.Contains(out, "origin") {
+		t.Fatalf("expected origin remote, got %q", out)
+	}
+	if _, _, err := r.run("clone", src); err == nil {
+		t.Fatal("clone over a store with secrets should fail")
+	}
+}
+
+func TestCloneReplacesEmptyStore(t *testing.T) {
+	r := newRunner(t)
+	src := seedSourceStore(t, r)
+	r.mustRun("ls") // first-run creates an empty store at the target (no secrets)
+
+	_, se, err := r.run("clone", src)
+	if err != nil {
+		t.Fatalf("clone should replace an empty store: %v\n%s", err, se)
+	}
+	has(t, se, "Replacing the empty store")
+	if got := r.mustRun("get", "RPC_URL"); got != "https://rpc" {
+		t.Fatalf("get after clone = %q", got)
+	}
+}
+
+// The 0700 store root is the access boundary; clone must lock it down regardless
+// of the umask git cloned under.
+func TestCloneLocksStoreDir(t *testing.T) {
+	r := newRunner(t)
+	src := seedSourceStore(t, r)
+	if _, se, err := r.run("clone", src); err != nil {
+		t.Fatalf("clone: %v\n%s", err, se)
+	}
+	fi, err := os.Stat(r.storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := fi.Mode().Perm(); m != 0o700 {
+		t.Fatalf("clone store dir = %o, want 700", m)
+	}
+}
+
+// set must base "exists" on the file, not on a successful decrypt: --skip over an
+// existing-but-unreadable key must error, never silently overwrite it.
+func TestSetSkipDoesNotOverwriteUnreadable(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "K", "original")
+	age := filepath.Join(r.storeDir, "K.age")
+	if err := os.WriteFile(age, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.run("set", "--skip", "K", "new"); err == nil {
+		t.Fatal("set --skip over an unreadable existing key should error, not overwrite")
+	}
+	if b, _ := os.ReadFile(age); string(b) != "garbage" {
+		t.Fatalf("K.age was modified: %q", b)
+	}
+}
+
+// ls lists scopes; a key or unknown name is a usage error with a helpful hint.
+func TestLsRejectsKeyAndUnknownScope(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "proj/DB", "url")
+	r.mustRun("set", "TOP", "v")
+	r.mustRun("ls", "proj") // a scope: fine
+	if _, se := r.mustFail("ls", "TOP"); !strings.Contains(se, "is not a scope") {
+		t.Fatalf("ls of a key should error that it's not a scope; got %q", se)
+	}
+	if _, se := r.mustFail("ls", "nope"); !strings.Contains(se, "no such scope") {
+		t.Fatalf("ls of an unknown scope should error; got %q", se)
+	}
+}

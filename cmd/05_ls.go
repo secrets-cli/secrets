@@ -16,9 +16,8 @@ func init() {
 var lsCmd = &cobra.Command{
 	Use:   "ls [scope]",
 	Short: "List keys in the store as a tree",
-	Long: `Print the store's keys as a tree (scopes are directories).
-
-With a scope argument, show only that subtree.`,
+	Long: `Print the store's keys as a tree (key scopes are a directory).
+If a scope if given, only that subtree's keys are shown.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		v, err := openVault()
@@ -30,12 +29,24 @@ With a scope argument, show only that subtree.`,
 			return InternalError(err.Error())
 		}
 		if len(args) == 1 {
-			prefix := strings.TrimSuffix(args[0], "/") + "/"
+			scope := strings.TrimSuffix(args[0], "/")
+			prefix := scope + "/"
 			var sub []string
+			isKey := false
 			for _, k := range keys {
-				if strings.HasPrefix(k, prefix) {
+				switch {
+				case strings.HasPrefix(k, prefix):
 					sub = append(sub, strings.TrimPrefix(k, prefix))
+				case k == scope:
+					isKey = true
 				}
+			}
+			if len(sub) == 0 {
+				// Only scopes are listable. Tell a key apart from a typo.
+				if isKey {
+					return UserError(fmt.Sprintf("%q is not a scope", scope))
+				}
+				return UserError(fmt.Sprintf("no such scope %q", scope))
 			}
 			keys = sub
 		}
