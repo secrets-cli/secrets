@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for the ssh-v1 (v0.6) vars. Uses a dedicated SSH key so
 # it's deterministic and needs no ssh-agent. git versioning is best-effort: the
-# history check is skipped where git isn't functional.
+# log/version check is skipped where the store isn't a git repo.
 set -euo pipefail
 
 BIN="${1:-./vars}"
@@ -101,14 +101,20 @@ contains "$($BIN dump --dotenv 2>/dev/null)" "ETHERSCAN_API="
 echo "--- version ---"
 contains "$($BIN --version)" "vars"
 
-echo "--- history (git; skipped where git is unavailable) ---"
+echo "--- set from stdin (multi-line) ---"
+printf 'line1\nline2' | $BIN set MULTILINE -
+test "$($BIN get MULTILINE)" = "$(printf 'line1\nline2')"
+
+echo "--- log + version retrieval (git; skipped where the store isn't a git repo) ---"
 $BIN set RPC_URL https://rpc-v2.example.com --replace >/dev/null 2>&1
-HIST=$($BIN history RPC_URL 2>/dev/null || true)
-if [ -n "$HIST" ]; then
-    contains "$HIST" "RPC_URL"
-    echo "    history OK"
+if [ -d "$VARS_STORE_DIR/.git" ]; then
+    LOG=$($BIN log RPC_URL)
+    contains "$LOG" "~0"          # versions are tagged with the ~N that retrieves them
+    contains "$LOG" "~1"
+    test "$($BIN get RPC_URL~1)" = "https://rpc.example.com"   # previous version
+    echo "    log + ~N retrieval OK"
 else
-    echo "    (no git history available here — skipped)"
+    echo "    (store is not a git repo here; skipped)"
 fi
 
 echo ""
