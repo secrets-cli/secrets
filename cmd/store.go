@@ -31,12 +31,13 @@ func openVault() (*vault.Vault, error) {
 
 // firstRun creates the store, selecting which SSH key to bind it to.
 func firstRun(dir string) error {
-	fmt.Fprintf(os.Stderr, "No store found, creating one at:\n  %s\n\n", dir)
-
+	// Resolve a usable key before announcing creation, so a keyless run errors
+	// cleanly instead of claiming to create a store it then can't.
 	signers, err := session.UsableInitSigners()
 	if err != nil {
 		return UserError(err.Error())
 	}
+	fmt.Fprintf(os.Stderr, "No store found, creating one at:\n  %s\n\n", dir)
 
 	signer := signers[0]
 	if len(signers) > 1 {

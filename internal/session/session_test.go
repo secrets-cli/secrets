@@ -34,6 +34,41 @@ func writeKey(t *testing.T) (path, fingerprint string) {
 	return path, ssh.FingerprintSHA256(ss.PublicKey())
 }
 
+// noKeyEnv neutralizes every SSH key source (env override, agent, default file)
+// so the resolver finds nothing: the "no key available" edge.
+func noKeyEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("VARS_SSH_KEY", "")
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv("HOME", t.TempDir()) // a home with no ~/.ssh keys
+}
+
+// With no key anywhere, creating a store (first run) errors with the actionable
+// ssh-keygen hint instead of half-creating something it can't encrypt to.
+func TestUsableInitSigners_NoKey(t *testing.T) {
+	noKeyEnv(t)
+	_, err := UsableInitSigners()
+	if err == nil {
+		t.Fatal("expected an error when no SSH key is available")
+	}
+	if !strings.Contains(err.Error(), "ssh-keygen") {
+		t.Fatalf("error should hint at ssh-keygen, got %q", err)
+	}
+}
+
+// With no key anywhere, resolving the store's key (read/write path) errors with
+// the actionable ssh-add hint.
+func TestSignerForFingerprint_NoKey(t *testing.T) {
+	noKeyEnv(t)
+	_, err := signerForFingerprint("SHA256:irrelevant")
+	if err == nil {
+		t.Fatal("expected an error when no SSH key is available")
+	}
+	if !strings.Contains(err.Error(), "ssh-add") {
+		t.Fatalf("error should hint at ssh-add, got %q", err)
+	}
+}
+
 func TestSignerForFingerprint_ViaEnvKey(t *testing.T) {
 	keyPath, fp := writeKey(t)
 	t.Setenv("VARS_SSH_KEY", keyPath)

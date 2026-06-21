@@ -1,9 +1,10 @@
 // Package vault is the vars store: one age-encrypted file per secret, scopes as
 // directories, rooted at a single directory that is usually a git repo.
 //
-// It does encrypted file CRUD only. Versioning is delegated to an optional
-// Committer (implemented by the git package), so the vault knows nothing about
-// git and stays trivially testable.
+// It does encrypted file CRUD plus the store's on-disk scaffolding (the
+// store.json descriptor and the static README/.gitignore/.gitattributes).
+// Versioning is delegated to an optional Committer (implemented by the git
+// package), so the vault knows nothing about git and stays trivially testable.
 package vault
 
 import (
@@ -23,6 +24,10 @@ const (
 	// DescriptorFile is the unencrypted store descriptor, committed with the store.
 	DescriptorFile = "store.json"
 	ageExt         = ".age"
+
+	// lockFile is the advisory mutation lock (gitignored by the default-deny
+	// allowlist, so it is never committed).
+	lockFile = ".vars.lock"
 
 	dirPerm  = 0o700
 	filePerm = 0o600
@@ -171,6 +176,11 @@ type Item struct {
 
 // Set encrypts value and writes it to <key>.age, then commits.
 func (v *Vault) Set(key string, value []byte) error {
+	unlock, err := lockStore(v.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := v.writeKey(key, value); err != nil {
 		return err
 	}
@@ -183,6 +193,11 @@ func (v *Vault) Set(key string, value []byte) error {
 // residual non-atomicity is a disk error partway through the final write loop,
 // which no single-rename scheme can avoid.
 func (v *Vault) SetMany(items []Item, message string) error {
+	unlock, err := lockStore(v.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	type blob struct {
 		path string
 		data []byte
@@ -198,6 +213,9 @@ func (v *Vault) SetMany(items []Item, message string) error {
 			return err
 		}
 		blobs = append(blobs, blob{path, ciphertext})
+	}
+	if err := WriteScaffold(v.dir); err != nil {
+		return err
 	}
 	for _, b := range blobs {
 		if err := os.MkdirAll(filepath.Dir(b.path), dirPerm); err != nil {
@@ -216,6 +234,9 @@ func (v *Vault) writeKey(key string, value []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := WriteScaffold(v.dir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return fmt.Errorf("creating scope directory: %w", err)
 	}
@@ -228,6 +249,11 @@ func (v *Vault) writeKey(key string, value []byte) error {
 
 // Delete removes key (and prunes now-empty scope directories), then commits.
 func (v *Vault) Delete(key string) error {
+	unlock, err := lockStore(v.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := v.removeKey(key); err != nil {
 		return err
 	}
@@ -236,6 +262,11 @@ func (v *Vault) Delete(key string) error {
 
 // DeleteMany removes several keys and commits once with the given message.
 func (v *Vault) DeleteMany(keys []string, message string) error {
+	unlock, err := lockStore(v.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for _, key := range keys {
 		if err := v.removeKey(key); err != nil {
 			return err
@@ -263,6 +294,11 @@ func (v *Vault) removeKey(key string) error {
 // Rename moves a key. No re-encryption: the wrapping key derives from the
 // in-file salt, not the path. Errors if dst exists or src is missing.
 func (v *Vault) Rename(from, to string) error {
+	unlock, err := lockStore(v.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	src, err := v.pathFor(from)
 	if err != nil {
 		return err
@@ -370,15 +406,51 @@ func validateKey(key string) error {
 	if strings.HasPrefix(key, "/") || strings.HasSuffix(key, "/") {
 		return fmt.Errorf("invalid key %q: must not start or end with %q", key, "/")
 	}
-	if strings.ContainsAny(key, "\x00\\") {
-		return fmt.Errorf("invalid key %q: contains an illegal character", key)
-	}
 	if strings.ContainsRune(key, '~') {
 		return fmt.Errorf("invalid key %q: '~' is reserved for version references (KEY~N)", key)
 	}
+	// Keys are file paths and env-var-ish names, so each '/'-separated segment is
+	// restricted to [A-Za-z0-9_-]: portable across machines and filesystems, no
+	// Unicode-normalization collisions, no path traversal, no surprises.
 	for _, seg := range strings.Split(key, "/") {
-		if seg == "" || seg == "." || seg == ".." {
-			return fmt.Errorf("invalid key %q: empty or relative path segment", key)
+		if seg == "" {
+			return fmt.Errorf("invalid key %q: empty scope segment", key)
+		}
+		for _, r := range seg {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+				return fmt.Errorf("invalid key %q: only letters, digits, '_', '-', and '/' separators are allowed", key)
+			}
+		}
+	}
+	return nil
+}
+
+// scaffoldFiles are the unencrypted, static files every store carries besides
+// store.json: the break-glass README and the git allowlist/attributes.
+var scaffoldFiles = []struct{ name, content string }{
+	{"README.md", readmeContent},
+	{".gitignore", gitignoreContent},
+	{".gitattributes", gitattributesContent},
+}
+
+// WriteScaffold writes any missing static store file (README, .gitignore,
+// .gitattributes), so creating a store and writing to one share a single code
+// path, and a write self-heals a store whose scaffolding was deleted or arrived
+// incomplete (e.g. a restored .gitignore re-arms the default-deny allowlist
+// before the next commit). It never overwrites an existing file, so a
+// customized README is preserved. store.json is not written here: it carries the
+// key fingerprint and is created when the store is opened (see session.Create).
+func WriteScaffold(dir string) error {
+	for _, f := range scaffoldFiles {
+		p := filepath.Join(dir, f.name)
+		switch _, err := os.Stat(p); {
+		case err == nil:
+			continue // present, leave it be
+		case !os.IsNotExist(err):
+			return err
+		}
+		if err := os.WriteFile(p, []byte(f.content), filePerm); err != nil {
+			return fmt.Errorf("writing %s: %w", f.name, err)
 		}
 	}
 	return nil
@@ -430,3 +502,47 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	success = true
 	return nil
 }
+
+// gitignoreContent is a default-deny allowlist: the store's git repo tracks only
+// encrypted secrets, the descriptor, and the README, never stray plaintext,
+// editor junk, or the atomic-write temp files. Users can `git add -f` to override.
+const gitignoreContent = `# vars store: commit only encrypted secrets, the descriptor, and this README.
+*
+!*/
+!*.age
+!/store.json
+!/README.md
+!/.gitignore
+!/.gitattributes
+`
+
+// gitattributesContent marks encrypted files as binary so git never text-merges
+// them (which would inject conflict markers into ciphertext) and never applies
+// line-ending conversion (which would corrupt the bytes under core.autocrlf). A
+// conflict on a key then resolves cleanly as a whole-file "pick a side".
+const gitattributesContent = "*.age binary\n"
+
+// readmeContent is written as README.md at the store root, so the directory
+// explains itself and documents how to recover secrets without the vars binary.
+const readmeContent = "# vars store\n\n" +
+	"This directory is an encrypted [vars](https://github.com/vars-cli/vars) store: one\n" +
+	"[age](https://age-encryption.org)-encrypted file per secret, each file's key derived\n" +
+	"from an SSH key (scheme `ssh-v1`; the key's fingerprint is in `store.json`).\n\n" +
+	"## Reading these secrets\n\n" +
+	"Use vars, it's open-source and a single static Go binary, so rebuild it if needed:\n\n" +
+	"    go install github.com/vars-cli/vars@latest   # if you don't have the binary\n" +
+	"    vars dump                                      # print every key and value\n" +
+	"    vars get <KEY>                                 # one value\n\n" +
+	"## If vars is unavailable: the format\n\n" +
+	"You need the SSH private key whose fingerprint is in `store.json`. Decryption uses\n" +
+	"standard primitives, so it can be reimplemented in any language with a crypto library\n" +
+	"(it is NOT a sequence of shell commands). For each `<key>.age`:\n\n" +
+	"1. Parse the age header; find the `-> vars-ssh-v1 <salt>` stanza. `<salt>` is base64\n" +
+	"   (raw std). Its body is `nonce (12 bytes) || ChaCha20-Poly1305-sealed file-key`.\n" +
+	"2. Sign the decoded salt with SSHSIG, namespace `vars.store.v1` (hash sha512):\n\n" +
+	"       ssh-keygen -Y sign -n vars.store.v1 -f ~/.ssh/id_ed25519 salt-file\n\n" +
+	"   Use the inner signature bytes (`string(format) || string(blob)`) from the `.sig`.\n" +
+	"3. `wrapKey = HKDF-SHA256(secret = signature bytes, salt = decoded salt, info = \"vars.store.v1/fileKey\")` (32 bytes).\n" +
+	"4. `file-key = ChaCha20-Poly1305-Open(wrapKey, nonce, sealed)`.\n" +
+	"5. Decrypt the age payload with that file-key (age's injected-file-key identity).\n\n" +
+	"Reference implementation: `internal/crypto/sshderive` in the vars source.\n"

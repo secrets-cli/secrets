@@ -43,6 +43,15 @@ func IsRepo(dir string) bool {
 	return exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Run() == nil
 }
 
+// Clone runs `git clone <remote> <dir>` with the process's own stdio, so the
+// user's credentials, host-key prompts, and progress all apply. It also sets
+// `origin`, so `vars sync` works immediately afterward.
+func Clone(remote, dir string) error {
+	cmd := exec.Command("git", "clone", remote, dir)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
 // Init initializes a git repo in dir (which must already exist) and ensures a
 // commit identity, so auto-commits never fail for lack of one. An existing
 // global/local identity is left untouched.

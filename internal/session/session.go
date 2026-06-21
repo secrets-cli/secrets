@@ -138,6 +138,15 @@ func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 	return nil, fmt.Errorf("could not find the SSH key this store needs (%s); load it with `ssh-add`, or point VARS_SSH_KEY at its file", fp)
 }
 
+// KeyAvailable reports whether the SSH key matching fingerprint can be resolved
+// right now (VARS_SSH_KEY / ssh-agent / default file). Used by `vars clone` to
+// tell the user if they're ready to decrypt; this key may differ from the one
+// that authenticated the git clone.
+func KeyAvailable(fingerprint string) bool {
+	_, err := signerForFingerprint(fingerprint)
+	return err == nil
+}
+
 // UsableInitSigners returns candidate keys for creating a new store: the
 // VARS_SSH_KEY file if set, otherwise every usable key in ssh-agent, otherwise
 // the default key file. Callers pick one (auto when there is exactly one).
@@ -170,14 +179,8 @@ func Create(dir string, signer *sshderive.Signer) error {
 	if err := vault.Init(dir, vault.Meta{Scheme: Scheme, KeyFingerprint: signer.Fingerprint()}); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(storeReadme), 0o644); err != nil {
-		return fmt.Errorf("writing README.md: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(storeGitignore), 0o644); err != nil {
-		return fmt.Errorf("writing .gitignore: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte(storeGitattributes), 0o644); err != nil {
-		return fmt.Errorf("writing .gitattributes: %w", err)
+	if err := vault.WriteScaffold(dir); err != nil {
+		return err
 	}
 	// git is a soft dependency: if it's missing or fails, the store is still
 	// created and fully usable, just without versioning/sync.
@@ -206,47 +209,3 @@ func defaultKeyPath() string {
 	}
 	return ""
 }
-
-// storeGitignore is a default-deny allowlist: the store's git repo tracks only
-// encrypted secrets, the descriptor, and the README — never stray plaintext,
-// editor junk, or the atomic-write temp files. Users can `git add -f` to override.
-const storeGitignore = `# vars store: commit only encrypted secrets, the descriptor, and this README.
-*
-!*/
-!*.age
-!/store.json
-!/README.md
-!/.gitignore
-!/.gitattributes
-`
-
-// storeGitattributes marks encrypted files as binary so git never text-merges
-// them (which would inject conflict markers into ciphertext) and never applies
-// line-ending conversion (which would corrupt the bytes under core.autocrlf). A
-// conflict on a key then resolves cleanly as a whole-file "pick a side".
-const storeGitattributes = "*.age binary\n"
-
-// storeReadme is written as README.md at the store root, so the directory
-// explains itself and documents how to recover secrets without the vars binary.
-const storeReadme = "# vars store\n\n" +
-	"This directory is an encrypted [vars](https://github.com/vars-cli/vars) store: one\n" +
-	"[age](https://age-encryption.org)-encrypted file per secret, each file's key derived\n" +
-	"from an SSH key (scheme `ssh-v1`; the key's fingerprint is in `store.json`).\n\n" +
-	"## Reading these secrets\n\n" +
-	"Use vars, it's open-source and a single static Go binary, so rebuild it if needed:\n\n" +
-	"    go install github.com/vars-cli/vars@latest   # if you don't have the binary\n" +
-	"    vars dump                                      # print every key and value\n" +
-	"    vars get <KEY>                                 # one value\n\n" +
-	"## If vars is unavailable: the format\n\n" +
-	"You need the SSH private key whose fingerprint is in `store.json`. Decryption uses\n" +
-	"standard primitives, so it can be reimplemented in any language with a crypto library\n" +
-	"(it is NOT a sequence of shell commands). For each `<key>.age`:\n\n" +
-	"1. Parse the age header; find the `-> vars-ssh-v1 <salt>` stanza. `<salt>` is base64\n" +
-	"   (raw std). Its body is `nonce (12 bytes) || ChaCha20-Poly1305-sealed file-key`.\n" +
-	"2. Sign the decoded salt with SSHSIG, namespace `vars.store.v1` (hash sha512):\n\n" +
-	"       ssh-keygen -Y sign -n vars.store.v1 -f ~/.ssh/id_ed25519 salt-file\n\n" +
-	"   Use the inner signature bytes (`string(format) || string(blob)`) from the `.sig`.\n" +
-	"3. `wrapKey = HKDF-SHA256(secret = signature bytes, salt = decoded salt, info = \"vars.store.v1/fileKey\")` (32 bytes).\n" +
-	"4. `file-key = ChaCha20-Poly1305-Open(wrapKey, nonce, sealed)`.\n" +
-	"5. Decrypt the age payload with that file-key (age's injected-file-key identity).\n\n" +
-	"Reference implementation: `internal/crypto/sshderive` in the vars source.\n"
