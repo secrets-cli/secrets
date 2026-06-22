@@ -240,6 +240,28 @@ func (r *Repo) firstRemote() string {
 	return "origin"
 }
 
+// Remote returns the name of the first configured remote (e.g. "origin").
+func (r *Repo) Remote() string { return r.firstRemote() }
+
+// RemoteURL returns the URL of the first configured remote, or "" if none.
+func (r *Repo) RemoteURL() string {
+	if !r.HasRemote() {
+		return ""
+	}
+	out, err := r.run("remote", "get-url", r.firstRemote())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// HasUncommittedChanges reports whether the working tree has changes git would
+// commit (e.g. left behind when a best-effort auto-commit failed).
+func (r *Repo) HasUncommittedChanges() bool {
+	out, err := r.run("status", "--porcelain")
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
 // gitExec runs a git subcommand in dir and returns combined output.
 func gitExec(dir string, args ...string) (string, error) {
 	var buf bytes.Buffer

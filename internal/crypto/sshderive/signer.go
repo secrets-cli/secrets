@@ -97,6 +97,21 @@ func sshString(b []byte) []byte {
 	return out
 }
 
+// FingerprintOfPubFile returns the SHA256 fingerprint of an OpenSSH public-key
+// file (e.g. ~/.ssh/id_vars.pub). It needs no passphrase, so it's usable to find
+// which key file matches a store, even when that key is passphrase-protected.
+func FingerprintOfPubFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	pub, _, _, _, err := ssh.ParseAuthorizedKey(data)
+	if err != nil {
+		return "", err
+	}
+	return ssh.FingerprintSHA256(pub), nil
+}
+
 // supportedKeyType returns nil for deterministic key types and a clear,
 // actionable error otherwise.
 func supportedKeyType(pub ssh.PublicKey) error {

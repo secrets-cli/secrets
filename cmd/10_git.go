@@ -11,8 +11,8 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(syncCmd)
+	rootCmd.AddCommand(gitCmd)
 }
 
 var gitCmd = &cobra.Command{
@@ -52,10 +52,11 @@ var syncCmd = &cobra.Command{
 		if !git.Available() || !git.IsRepo(dir) {
 			return UserError("the store is not a git repo; nothing to sync")
 		}
-		if err := git.New(dir).Sync(); err != nil {
+		repo := git.New(dir)
+		if err := repo.Sync(); err != nil {
 			return UserError(err.Error())
 		}
-		fmt.Fprintln(os.Stderr, "Synced")
+		fmt.Fprintf(os.Stderr, "Store synced with %s\n", repo.Remote())
 		return nil
 	},
 }

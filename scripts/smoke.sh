@@ -96,7 +96,7 @@ $BIN rm RENAMED_A --force >/dev/null
 ! $BIN get RENAMED_A 2>/dev/null
 
 echo "--- dump ---"
-contains "$($BIN dump --dotenv 2>/dev/null)" "ETHERSCAN_API="
+contains "$($BIN dump --force --dotenv 2>/dev/null)" "ETHERSCAN_API="
 
 echo "--- version ---"
 contains "$($BIN --version)" "vars"
