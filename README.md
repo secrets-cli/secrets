@@ -334,6 +334,7 @@ vars resolve [flags]          # resolve manifest keys as shell exports
 vars git <args>               # run git in the store directory
 vars sync                     # pull + push the store to its remote
 vars clone <remote>           # clone the store from a remote repo
+vars info                     # store location, key + readiness, counts, git (read-only)
 ```
 
 `resolve` flags: `-f/--file`, `-p/--profile`, `--dotenv`, `--fish`, `--partial`,

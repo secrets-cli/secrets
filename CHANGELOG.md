@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [0.8.0]
 
 ### Added
+- `vars info` prints a read-only summary of the store: its location, the SSH key it's encrypted to and whether that key is available right now (and from where, agent, a `~/.ssh` file, or `VARS_SSH_KEY`), the secret/scope counts, and local git state. It needs no key and touches no network, so it's the command to run when you can't decrypt and want to know why.
 - `vars clone <remote>` clones an existing store from a git remote into your local store directory (e.g. to set up from a store you already pushed), instead of creating a fresh, divergent one. It replaces an empty local store but refuses to overwrite one that holds secrets, locks the store directory to `0700`, and reports whether the SSH key the store is encrypted to is available (that key may differ from the one that authenticated the clone). `git clone` sets `origin`, so `vars sync` works immediately.
 
 ### Changed

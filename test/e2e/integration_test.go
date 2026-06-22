@@ -427,6 +427,21 @@ func TestDump(t *testing.T) {
 	has(t, out, "prod/B=2")
 }
 
+// info is a read-only, keyless diagnostic: store path, key + readiness, counts, git.
+func TestInfo(t *testing.T) {
+	r := newRunner(t)
+	r.mustFail("info") // no store yet
+	r.mustRun("set", "A", "1")
+	r.mustRun("set", "prod/B", "2")
+
+	out := r.mustRun("info")
+	has(t, out, "Store:")
+	has(t, out, "ssh-v1")
+	has(t, out, "Secrets:  2  (1 scope)")
+	has(t, out, "available") // the runner pins VARS_SSH_KEY, so the key resolves
+	has(t, out, "Git:")
+}
+
 // dump prints every secret in plaintext, so it confirms (or takes --force) and
 // refuses non-interactively without it, like rm/mv.
 func TestDumpRequiresForceWhenNonInteractive(t *testing.T) {

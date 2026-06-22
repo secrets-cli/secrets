@@ -190,6 +190,37 @@ func KeyAvailable(fingerprint string) bool {
 	return err == nil
 }
 
+// KeyStatus describes, in one line, whether the store's key resolves right now
+// and from where. For `vars info`: read-only and non-interactive (never loads a
+// key or prompts). Mirrors signerForFingerprint's resolution order, keep in sync.
+func KeyStatus(fingerprint string) string {
+	if path := os.Getenv("VARS_SSH_KEY"); path != "" {
+		s, err := sshderive.FromFile(path)
+		switch {
+		case err != nil:
+			return fmt.Sprintf("VARS_SSH_KEY %s set but unusable: %v", path, err)
+		case fingerprint != "" && s.Fingerprint() != fingerprint:
+			return fmt.Sprintf("VARS_SSH_KEY points at %s, not this store's key", s.Fingerprint())
+		default:
+			return fmt.Sprintf("available (VARS_SSH_KEY: %s)", path)
+		}
+	}
+	if ag, conn, err := sshderive.DialAgent(); err == nil {
+		_, ferr := sshderive.FromAgent(ag, fingerprint)
+		conn.Close()
+		if ferr == nil {
+			return "available (loaded in ssh-agent)"
+		}
+	}
+	if path := keyFileForFingerprint(fingerprint); path != "" {
+		if s, err := sshderive.FromFile(path); err == nil && s.Fingerprint() == fingerprint {
+			return fmt.Sprintf("available (%s)", path)
+		}
+		return fmt.Sprintf("not loaded: run `ssh-add %s`", path)
+	}
+	return "not found: no key in ~/.ssh matches; load with `ssh-add` or set VARS_SSH_KEY"
+}
+
 // ensureSigner resolves the store's key and, if it isn't loaded yet, loads the
 // matching key file into ssh-agent with `ssh-add` (which prompts for its
 // passphrase), then retries, so a single command unlocks and runs in one go. It
