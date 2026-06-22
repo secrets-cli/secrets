@@ -6,8 +6,12 @@ package session
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	"golang.org/x/term"
 
 	"github.com/vars-cli/vars/internal/crypto"
 	"github.com/vars-cli/vars/internal/crypto/sshderive"
@@ -65,7 +69,7 @@ func newLazyBackend(fingerprint string) *lazyBackend { return &lazyBackend{finge
 
 func (l *lazyBackend) resolve() (crypto.Backend, error) {
 	l.once.Do(func() {
-		signer, err := signerForFingerprint(l.fingerprint)
+		signer, err := ensureSigner(l.fingerprint)
 		if err != nil {
 			l.err = err
 			return
@@ -130,21 +134,102 @@ func signerForFingerprint(fp string) (*sshderive.Signer, error) {
 		}
 		conn.Close() // agent lacks the key — release before trying the key file
 	}
+	// Find the key file whose fingerprint matches the store, anywhere in ~/.ssh
+	// (by its .pub, so the name needn't be id_ed25519 and the key may be
+	// passphrase-protected). If found but not directly loadable, name it so the
+	// user knows exactly which key to `ssh-add`.
+	if path := keyFileForFingerprint(fp); path != "" {
+		if s, err := sshderive.FromFile(path); err == nil && s.Fingerprint() == fp {
+			return s, nil
+		}
+		return nil, fmt.Errorf("this store's key is %s.\nLoad it with `ssh-add %s`", path, path)
+	}
 	if path := defaultKeyPath(); path != "" {
 		if s, err := sshderive.FromFile(path); err == nil && (fp == "" || s.Fingerprint() == fp) {
 			return s, nil
 		}
 	}
-	return nil, fmt.Errorf("could not find the SSH key this store needs (%s); load it with `ssh-add`, or point VARS_SSH_KEY at its file", fp)
+	return nil, fmt.Errorf("could not find the SSH key this store needs (%s).\nLoad it with `ssh-add`, or point VARS_SSH_KEY at its file.", fp)
 }
 
-// KeyAvailable reports whether the SSH key matching fingerprint can be resolved
-// right now (VARS_SSH_KEY / ssh-agent / default file). Used by `vars clone` to
-// tell the user if they're ready to decrypt; this key may differ from the one
-// that authenticated the git clone.
+// keyFileForFingerprint scans ~/.ssh for the private key whose public half
+// matches fp, returning its path (the matched .pub without the suffix) or "".
+// Matching by fingerprint means a dedicated decryption key needs no special name
+// and no VARS_SSH_KEY: drop it in ~/.ssh and vars finds it.
+func keyFileForFingerprint(fp string) string {
+	if fp == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	pubs, _ := filepath.Glob(filepath.Join(home, ".ssh", "*.pub"))
+	for _, pub := range pubs {
+		if f, err := sshderive.FingerprintOfPubFile(pub); err == nil && f == fp {
+			return strings.TrimSuffix(pub, ".pub")
+		}
+	}
+	return ""
+}
+
+// EnsureKey resolves the store's key, auto-loading it via ssh-add when possible
+// (see ensureSigner), and returns nil on success or the resolution error. Used by
+// `vars dump` to unlock-and-fail-once up front instead of warning per key.
+func EnsureKey(fingerprint string) error {
+	_, err := ensureSigner(fingerprint)
+	return err
+}
+
+// KeyAvailable reports whether the SSH key matching fingerprint resolves right
+// now, without prompting. Used by `vars clone` to tell the user if they're ready
+// to decrypt; this key may differ from the one that authenticated the clone.
+// Stays non-interactive on purpose (a readiness check must never prompt).
 func KeyAvailable(fingerprint string) bool {
 	_, err := signerForFingerprint(fingerprint)
 	return err == nil
+}
+
+// ensureSigner resolves the store's key and, if it isn't loaded yet, loads the
+// matching key file into ssh-agent with `ssh-add` (which prompts for its
+// passphrase), then retries, so a single command unlocks and runs in one go. It
+// only does this when there's an agent to load into and a terminal to prompt on
+// (otherwise it would hang), and only for the key vars discovered in ~/.ssh, not
+// an explicit VARS_SSH_KEY (that's a strict, deliberate choice) and not the whole
+// default set, so it touches exactly the one key this store needs.
+func ensureSigner(fingerprint string) (*sshderive.Signer, error) {
+	signer, err := signerForFingerprint(fingerprint)
+	if err == nil || !canPromptForKey() || os.Getenv("VARS_SSH_KEY") != "" {
+		return signer, err
+	}
+	path := keyFileForFingerprint(fingerprint)
+	if path == "" {
+		return signer, err // don't know which file to load; keep the original error
+	}
+	fmt.Fprintf(os.Stderr, "vars: loading %s into ssh-agent...\n", path)
+	if addErr := runSSHAdd(path); addErr != nil {
+		return nil, err // keep the original, actionable error
+	}
+	return signerForFingerprint(fingerprint)
+}
+
+// canPromptForKey reports whether ssh-add could succeed: an agent to add the key
+// to, and a terminal to prompt the passphrase on. A real TTY is required (not
+// SSH_ASKPASS) so non-interactive contexts get a clean error instead of hanging
+// on a passphrase that can never arrive. Use `ssh -t host vars …` to get a TTY.
+func canPromptForKey() bool {
+	if os.Getenv("SSH_AUTH_SOCK") == "" {
+		return false
+	}
+	return term.IsTerminal(int(os.Stdin.Fd())) || term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// runSSHAdd loads a specific key file into the agent. ssh-add prompts on the
+// terminal; its stdout goes to stderr so it never pollutes command output.
+func runSSHAdd(path string) error {
+	cmd := exec.Command("ssh-add", path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+	return cmd.Run()
 }
 
 // UsableInitSigners returns candidate keys for creating a new store: the

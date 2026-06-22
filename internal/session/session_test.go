@@ -34,6 +34,92 @@ func writeKey(t *testing.T) (path, fingerprint string) {
 	return path, ssh.FingerprintSHA256(ss.PublicKey())
 }
 
+// writeKeyInDir writes a key (and its .pub) at sshDir/name, optionally
+// passphrase-protected, and returns its SHA256 fingerprint.
+func writeKeyInDir(t *testing.T, sshDir, name, passphrase string) (fingerprint string) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	var block *pem.Block
+	if passphrase == "" {
+		block, err = ssh.MarshalPrivateKey(priv, "")
+	} else {
+		block, err = ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(passphrase))
+	}
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, name), pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ss, _ := ssh.NewSignerFromKey(priv)
+	if err := os.WriteFile(filepath.Join(sshDir, name+".pub"), ssh.MarshalAuthorizedKey(ss.PublicKey()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ssh.FingerprintSHA256(ss.PublicKey())
+}
+
+// canPromptForKey must be false without an agent, so ensureSigner never shells
+// out to ssh-add (which would block) when there's nothing to load the key into.
+func TestCanPromptForKey_NoAgent(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	if canPromptForKey() {
+		t.Fatal("canPromptForKey must be false with no agent")
+	}
+}
+
+// ensureSigner returns a directly-loadable key as-is, without attempting ssh-add.
+func TestEnsureSigner_ReturnsAvailableKey(t *testing.T) {
+	keyPath, fp := writeKey(t)
+	t.Setenv("VARS_SSH_KEY", keyPath)
+	s, err := ensureSigner(fp)
+	if err != nil {
+		t.Fatalf("ensureSigner: %v", err)
+	}
+	if s.Fingerprint() != fp {
+		t.Fatalf("fingerprint = %s, want %s", s.Fingerprint(), fp)
+	}
+}
+
+// vars finds the store's key by fingerprint anywhere in ~/.ssh, even with a
+// non-default filename and no VARS_SSH_KEY / agent.
+func TestSignerForFingerprint_DiscoversByFingerprint(t *testing.T) {
+	home := t.TempDir()
+	fp := writeKeyInDir(t, filepath.Join(home, ".ssh"), "id_vars", "")
+	t.Setenv("VARS_SSH_KEY", "")
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv("HOME", home)
+	s, err := signerForFingerprint(fp)
+	if err != nil {
+		t.Fatalf("discovery should find id_vars: %v", err)
+	}
+	if s.Fingerprint() != fp {
+		t.Fatalf("fingerprint = %s, want %s", s.Fingerprint(), fp)
+	}
+}
+
+// When the matching key is found but passphrase-protected (and not in the agent),
+// the error names the exact file to ssh-add instead of a generic hint.
+func TestSignerForFingerprint_DiscoveredEncryptedNamesFile(t *testing.T) {
+	home := t.TempDir()
+	fp := writeKeyInDir(t, filepath.Join(home, ".ssh"), "id_vars", "pw")
+	t.Setenv("VARS_SSH_KEY", "")
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv("HOME", home)
+	_, err := signerForFingerprint(fp)
+	if err == nil {
+		t.Fatal("expected an error for a passphrase-protected key")
+	}
+	if !strings.Contains(err.Error(), "id_vars") || !strings.Contains(err.Error(), "ssh-add") {
+		t.Fatalf("error should name the key file and ssh-add, got: %v", err)
+	}
+}
+
 // noKeyEnv neutralizes every SSH key source (env override, agent, default file)
 // so the resolver finds nothing: the "no key available" edge.
 func noKeyEnv(t *testing.T) {

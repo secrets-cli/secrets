@@ -259,6 +259,41 @@ fingerprint in `store.json`. To force a specific key (a non-standard path or dis
 export VARS_SSH_KEY=~/.ssh/id_work
 ```
 
+### Using a dedicated decryption key
+
+You don't have to reuse your everyday login key. A common setup: a **separate key
+just for vars**, kept alongside your others.
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/id_vars   # a key only for decrypting the store
+```
+
+- **Discovery is automatic.** vars scans `~/.ssh` and uses whichever key matches
+  the store's fingerprint, `~/.ssh/id_vars` (or any name) is found on its own.
+- **It won't interfere with logging into servers.** A non-default filename like
+  `id_vars` is *not* offered by `ssh` or loaded by a bare `ssh-add`, so your login
+  key stays the one used for servers.
+- **Keep it passphrase-protected.** When you run a command that needs it in a
+  terminal, vars runs `ssh-add ~/.ssh/id_vars` for you (prompting once) and proceeds;
+  after that it's cached in the agent for the session.
+
+Once `id_vars` is in the agent alongside your login key, it can be offered to
+servers. To keep logins on your real key(s) only, set `IdentitiesOnly` globally and
+**list each login key** (the `IdentityFile` lines accumulate into an allowlist;
+anything not listed, including `id_vars`, is never offered):
+
+```
+# ~/.ssh/config
+Host *
+    IdentitiesOnly yes
+    IdentityFile ~/.ssh/id_ed25519      # list every key you log in with
+    IdentityFile ~/.ssh/id_rsa
+
+Host github.com
+    IdentitiesOnly yes
+    IdentityFile ~/.ssh/id_github
+```
+
 ---
 
 ## Security
@@ -293,7 +328,7 @@ vars mv <old> <new>           # rename a key (-f to skip the prompt)
 vars rm <key>...              # delete keys (-f to skip the prompt)
 vars log <key>                # a key's change history (newest first)
 vars import [scope] <file>    # import key=value pairs from a .env file
-vars dump                     # print all keys and values
+vars dump                     # print all keys and values (-f to skip the confirm)
 vars init                     # scaffold .vars.yaml in the current directory
 vars resolve [flags]          # resolve manifest keys as shell exports
 vars git <args>               # run git in the store directory
@@ -302,7 +337,7 @@ vars clone <remote>           # clone the store from a remote repo
 ```
 
 `resolve` flags: `-f/--file`, `-p/--profile`, `--dotenv`, `--fish`, `--partial`,
-`--origin`. `set`/`import` take `--replace`/`--skip`; `mv`/`rm` take `-f/--force`.
+`--origin`. `set`/`import` take `--replace`/`--skip`; `mv`/`rm`/`dump` take `-f/--force`.
 
 ---
 

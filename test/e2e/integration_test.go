@@ -422,9 +422,19 @@ func TestDump(t *testing.T) {
 	r := newRunner(t)
 	r.mustRun("set", "A", "1")
 	r.mustRun("set", "prod/B", "2")
-	out := r.mustRun("dump", "--dotenv")
+	out := r.mustRun("dump", "--force", "--dotenv")
 	has(t, out, "A=1")
 	has(t, out, "prod/B=2")
+}
+
+// dump prints every secret in plaintext, so it confirms (or takes --force) and
+// refuses non-interactively without it, like rm/mv.
+func TestDumpRequiresForceWhenNonInteractive(t *testing.T) {
+	r := newRunner(t)
+	r.mustRun("set", "A", "1")
+	_, se := r.mustFail("dump") // no --force, no TTY
+	has(t, se, "requires confirmation")
+	r.mustRun("dump", "--force") // --force proceeds
 }
 
 // --- log (git-backed; skipped where git isn't functional) ---
@@ -619,11 +629,11 @@ func TestDumpResilientToDotenvNewline(t *testing.T) {
 	r.mustRun("set", "NORMAL", "ok")
 	r.runStdin("a\nb", "set", "PEM", "-")
 	// --dotenv can't represent the multi-line value: skip+warn+nonzero, keep the rest.
-	so, se := r.mustFail("dump", "--dotenv")
+	so, se := r.mustFail("dump", "--force", "--dotenv")
 	has(t, so, "NORMAL=ok")
 	has(t, se, "skipping")
 	// posix dump handles both.
-	all := r.mustRun("dump")
+	all := r.mustRun("dump", "--force")
 	has(t, all, "export NORMAL='ok'")
 	has(t, all, "export PEM='a\nb'")
 }
