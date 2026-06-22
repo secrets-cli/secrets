@@ -11,8 +11,8 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(syncCmd)
+	rootCmd.AddCommand(gitCmd)
 }
 
 var gitCmd = &cobra.Command{
