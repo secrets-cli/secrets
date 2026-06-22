@@ -4,26 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.8.0]
+## [0.9.0]
 
 ### Added
 - `vars info` prints a read-only summary of the store: its location, the SSH key it's encrypted to and whether that key is available right now (and from where, agent, a `~/.ssh` file, or `VARS_SSH_KEY`), the secret/scope counts, and local git state. It needs no key and touches no network, so it's the command to run when you can't decrypt and want to know why.
-- `vars clone <remote>` clones an existing store from a git remote into your local store directory (e.g. to set up from a store you already pushed), instead of creating a fresh, divergent one. It replaces an empty local store but refuses to overwrite one that holds secrets, locks the store directory to `0700`, and reports whether the SSH key the store is encrypted to is available (that key may differ from the one that authenticated the clone). `git clone` sets `origin`, so `vars sync` works immediately.
 
 ### Changed
 - The SSH key is found by **fingerprint** across `~/.ssh`, not just the conventional `id_ed25519`/`id_rsa` names. So a dedicated decryption key under any filename (e.g. `~/.ssh/id_vars`) is picked up automatically, no `VARS_SSH_KEY` needed. When the matching key is found but can't be loaded (passphrase-protected and not in the agent), the error names the exact file: `load it with ssh-add <path>`.
 - When a command needs the key and it isn't loaded, vars runs `ssh-add` on **that specific key** (prompting for its passphrase) and proceeds in one go, but only when there's a terminal to prompt on and an agent to load into. Non-interactive runs get a clean error instead of hanging, and an explicit `VARS_SSH_KEY` is left strict (not auto-loaded). Use `ssh -t host vars …` to get a prompt over SSH.
+- `vars dump` confirms before printing every secret in plaintext (the deliberate exception to the store's purpose). `--force`/`-f` skips the prompt and is required for non-interactive use, so a stray script can't mass-export every secret. `vars resolve` remains the command for feeding secrets into a process/pipe.
+
+### Fixed
+- `vars dump` fails once with a single message when the store's SSH key isn't available, instead of warning per key. The per-key skip+warn remains for individual unreadable files.
+
+## [0.8.0]
+
+### Added
+- `vars clone <remote>` clones an existing store from a git remote into your local store directory (e.g. to set up from a store you already pushed), instead of creating a fresh, divergent one. It replaces an empty local store but refuses to overwrite one that holds secrets, locks the store directory to `0700`, and reports whether the SSH key the store is encrypted to is available (that key may differ from the one that authenticated the clone). `git clone` sets `origin`, so `vars sync` works immediately.
+
+### Changed
 - Writing to a store self-heals its static scaffolding: a missing `README.md`, `.gitignore`, or `.gitattributes` is recreated on the next write (a deleted `.gitignore` re-arms the default-deny allowlist before secrets are committed). Existing files are never overwritten. The scaffold now has a single source of truth in the `vault` package, shared by store creation and writes.
 - `vars ls <arg>` accepts only a scope.
 - Concurrent mutations are serialized by an advisory file lock (`flock` on a gitignored `.vars.lock`), so two simultaneous writes no longer race the git index, and a rename can't clobber a concurrently created key. The lock auto-releases if the process dies; it's a no-op on platforms without `flock` (vars targets Unix).
 - Key names are restricted to `[A-Za-z0-9_-]` segments separated by `/`. This rejects accents and other non-ASCII (which collide across machines under Unicode normalization), control characters, and path-traversal, keeping keys portable and predictable.
 
-### Changed
-- `vars dump` confirms before printing every secret in plaintext (the deliberate exception to the store's purpose). `--force`/`-f` skips the prompt and is required for non-interactive use, so a stray script can't mass-export every secret. `vars resolve` remains the command for feeding secrets into a process/pipe.
-
 ### Fixed
 - `vars set` treated an existing key whose value can't be decrypted (corrupt or foreign file, or the wrong key loaded) as a brand-new key: `--skip` would overwrite it and a plain `set` replaced it silently. It now surfaces the read failure instead, matching `vars import`.
-- `vars dump` fails once with a single message when the store's SSH key isn't available, instead of warning per key. The per-key skip+warn remains for individual unreadable files.
 
 ## [0.7.0]
 
