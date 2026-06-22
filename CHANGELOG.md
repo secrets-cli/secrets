@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The SSH key is found by **fingerprint** across `~/.ssh`, not just the conventional `id_ed25519`/`id_rsa` names. So a dedicated decryption key under any filename (e.g. `~/.ssh/id_vars`) is picked up automatically, no `VARS_SSH_KEY` needed. When the matching key is found but can't be loaded (passphrase-protected and not in the agent), the error names the exact file: `load it with ssh-add <path>`.
 - When a command needs the key and it isn't loaded, vars runs `ssh-add` on **that specific key** (prompting for its passphrase) and proceeds in one go, but only when there's a terminal to prompt on and an agent to load into. Non-interactive runs get a clean error instead of hanging, and an explicit `VARS_SSH_KEY` is left strict (not auto-loaded). Use `ssh -t host vars …` to get a prompt over SSH.
 - `vars dump` confirms before printing every secret in plaintext (the deliberate exception to the store's purpose). `--force`/`-f` skips the prompt and is required for non-interactive use, so a stray script can't mass-export every secret. `vars resolve` remains the command for feeding secrets into a process/pipe.
+- `vars sync` reports the remote it synced with (`Store synced with <remote>`); `clone` and `sync` sit together in `vars help`.
 
 ### Fixed
 - `vars dump` fails once with a single message when the store's SSH key isn't available, instead of warning per key. The per-key skip+warn remains for individual unreadable files.

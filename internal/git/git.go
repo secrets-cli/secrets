@@ -240,6 +240,9 @@ func (r *Repo) firstRemote() string {
 	return "origin"
 }
 
+// Remote returns the name of the first configured remote (e.g. "origin").
+func (r *Repo) Remote() string { return r.firstRemote() }
+
 // RemoteURL returns the URL of the first configured remote, or "" if none.
 func (r *Repo) RemoteURL() string {
 	if !r.HasRemote() {
