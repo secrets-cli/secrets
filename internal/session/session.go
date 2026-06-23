@@ -245,21 +245,27 @@ func ensureSigner(fingerprint string) (*sshderive.Signer, error) {
 }
 
 // canPromptForKey reports whether ssh-add could succeed: an agent to add the key
-// to, and a terminal to prompt the passphrase on. A real TTY is required (not
-// SSH_ASKPASS) so non-interactive contexts get a clean error instead of hanging
-// on a passphrase that can never arrive. Use `ssh -t host vars …` to get a TTY.
+// to, and an interactive terminal on stdin. It checks stdin specifically because
+// ssh-add decides to prompt on the terminal vs. fall back to a GUI askpass based
+// on whether stdin is a tty; when it isn't (a shell hook, direnv, piped stdin) it
+// tries SSH_ASKPASS, whose macOS default (/usr/X11R6/bin/ssh-askpass) isn't
+// installed and errors. Gating on stdin keeps those contexts on the clean
+// "load it with ssh-add" message. Use `ssh -t host vars …` to get a TTY over SSH.
 func canPromptForKey() bool {
 	if os.Getenv("SSH_AUTH_SOCK") == "" {
 		return false
 	}
-	return term.IsTerminal(int(os.Stdin.Fd())) || term.IsTerminal(int(os.Stderr.Fd()))
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// runSSHAdd loads a specific key file into the agent. ssh-add prompts on the
-// terminal; its stdout goes to stderr so it never pollutes command output.
+// runSSHAdd loads a specific key file into the agent. SSH_ASKPASS_REQUIRE=never
+// forces ssh-add to prompt on the terminal rather than exec a GUI askpass (which
+// is usually absent), so it can't fail with a missing-askpass error. Its stdout
+// goes to stderr so it never pollutes command output.
 func runSSHAdd(path string) error {
 	cmd := exec.Command("ssh-add", path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+	cmd.Env = append(os.Environ(), "SSH_ASKPASS_REQUIRE=never")
 	return cmd.Run()
 }
 

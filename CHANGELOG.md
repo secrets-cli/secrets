@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0]
+
+### Fixed
+- Auto-`ssh-add` no longer misfires in non-interactive contexts. It now gates on **stdin** being a terminal (how `ssh-add` itself decides whether to prompt) and forces ssh-add to use the terminal via `SSH_ASKPASS_REQUIRE=never`, never a GUI askpass. Fixes a noisy `ssh_askpass: exec(/usr/X11R6/bin/ssh-askpass): No such file or directory` error on macOS when running `vars resolve` from a shell hook / `direnv` / piped stdin (stderr was a TTY but stdin wasn't); those contexts now get just the clean "load it with `ssh-add <path>`" message.
+
 ## [0.9.0]
 
 ### Added
