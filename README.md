@@ -26,6 +26,14 @@ deno run index.ts                      # your app just sees normal env vars
 
 **1. Install**
 
+Homebrew, on macOS or Linux:
+
+```sh
+brew install vars-cli/tap/vars
+```
+
+Or grab a binary directly:
+
 ```sh
 # macOS (Apple Silicon)
 curl -L https://github.com/vars-cli/vars/releases/latest/download/vars_darwin_arm64.tar.gz | tar xz
