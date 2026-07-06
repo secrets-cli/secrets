@@ -1,0 +1,14 @@
+# Weekly automated dependency-update PRs.
+#   gomod           — Go modules in go.mod (direct + indirect)
+#   github-actions  — action versions used in .github/workflows
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
