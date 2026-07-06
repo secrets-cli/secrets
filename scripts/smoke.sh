@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for the ssh-v1 (v0.6) vars. Uses a dedicated SSH key so
-# it's deterministic and needs no ssh-agent. git versioning is best-effort: the
-# log/version check is skipped where the store isn't a git repo.
+# encryption is deterministic and needs no ssh-agent. git versioning is a soft
+# dependency: checks that need it are skipped when the store isn't a git repo —
+# but if it IS one, an early gate fails fast when commits aren't landing (e.g. a
+# global signed-commit config with the signing key not in ssh-agent) instead of
+# masking it and dying confusingly at the end.
 set -euo pipefail
 
 BIN="${1:-./vars}"
@@ -20,6 +23,18 @@ echo "--- first run + set ---"
 $BIN set RPC_URL https://rpc.example.com
 $BIN set PRIVATE_KEY 0xTESTKEY
 $BIN set ETHERSCAN_API abc123
+
+# vars auto-commits are best-effort: a failed commit only warns and still exits
+# 0, so the rest of this suite would silently run against an unversioned store.
+# If the store is a git repo, the sets above MUST have produced a commit — an
+# unborn HEAD means versioning is broken (commonly a global commit.gpgsign=true
+# with the signing key not loaded in ssh-agent). Detect it now and quit clearly.
+if [ -d "$VARS_STORE_DIR/.git" ] && ! git -C "$VARS_STORE_DIR" rev-parse --verify -q HEAD >/dev/null; then
+    echo "SMOKE FAIL: the store is a git repo but no commit was created — git versioning is broken." >&2
+    echo "  Likely a global signed-commit config (commit.gpgsign=true) with the signing key not in" >&2
+    echo "  ssh-agent. Load it with 'ssh-add', or disable signing for this run, then retry." >&2
+    exit 1
+fi
 
 echo "--- get ---"
 test "$($BIN get RPC_URL)" = "https://rpc.example.com"

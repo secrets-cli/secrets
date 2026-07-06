@@ -34,6 +34,11 @@ lint:
 [group('dev')]
 check: vet lint test
 
+# Scan for known vulnerabilities that are actually reachable (govulncheck)
+[group('dev')]
+audit:
+    go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 # Run unit tests
 [group('test')]
 test:
